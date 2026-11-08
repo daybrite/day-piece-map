@@ -1,0 +1,24 @@
+/target
+/demo/target
+/demo/build
+
+# No lock, here or in demo/. Every day crate is a bare git dependency on main, and this
+# repository's job is to prove itself against the newest one: CI resolves a fresh lock on every
+# run, and a committed one would only pin staleness, or, after `day patch --local`, record the
+# paths of one developer's machine. An app that depends on this crate commits its own lock.
+/Cargo.lock
+/demo/Cargo.lock
+
+# Machine-local: `day patch --local <checkout>` writes these to build against a day (or piece)
+# checkout instead of the git dependency. CI has no such file and resolves git.
+/.cargo/config.toml
+/demo/.cargo/config.toml
+
+# Xcode and Gradle local state inside the demo's platform scaffolds (see demo/.gitignore).
+/demo/**/xcuserdata/
+/demo/**/DerivedData/
+/demo/**/*.xcodeproj/project.xcworkspace/
+/demo/platform/android/.gradle/
+/demo/platform/android/**/build/
+/demo/platform/android/local.properties
+/demo/platform/android/.idea/

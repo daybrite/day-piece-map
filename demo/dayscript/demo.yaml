@@ -1,0 +1,97 @@
+# The demo's walkthrough (https://daybrite.dev/docs/how-to/dayscript), and the piece's test on a
+# real toolkit: it runs on the iOS Simulator, the Android emulator and a headless browser in CI,
+# and the same command runs it here:
+#
+#     day launch -t macos-appkit --script dayscript/demo.yaml
+#
+# It switches the map to the built-in sample first, so what it draws and asserts on needs no
+# network and is the same on every target. The map is drawn on the canvas, so the assertions read
+# the piece's readouts (status, position, what the frame drew) and the screenshots show the map.
+name: demo
+description: Switch to the built-in island, tap its marker, fly, fit and turn by button, pan and zoom by gesture, read back where the map went, then draw the recorded Liberty style offline.
+flow:
+  - wait_for: { id: map_canvas }
+  - assert_visible: { id: map_title }
+  - select: { id: map_source, index: 7 }
+  - pause: { secs: 2.0 } # the style loads, its tiles arrive, the frame re-records
+  - assert_text: { id: map_status, text: "Ready" }
+  - assert_text: { id: map_position, text: "0.0000, 0.0000 at zoom 9.00" }
+  - screenshot: map-island
+
+  # The marker on the capital sits at the center: a tap on it names it in the readout, after
+  # the double-tap window has passed.
+  - tap: { id: map_canvas }
+  - pause: { secs: 0.8 }
+  - assert_text: { id: map_tap, text: "Marker: Island center" }
+
+  # The camera API: a flight lands on the east coast, a fit frames both markers, a turn and
+  # north again.
+  - tap: { id: map_fly }
+  - pause: { secs: 1.6 }
+  - assert_text: { id: map_position, text: "0.3000, 1.1800 at zoom 16.00" }
+  - tap: { id: map_fit }
+  - pause: { secs: 1.6 }
+  - assert_visible: { id: map_position }
+  - screenshot: map-fitted
+  - tap: { id: map_rotate }
+  - pause: { secs: 1.0 }
+  - assert_text: { id: map_bearing, text: "Bearing 45°" }
+  - screenshot: map-turned
+  - tap: { id: map_north }
+  - pause: { secs: 1.0 }
+  - assert_text: { id: map_bearing, text: "North up" }
+
+  # A two-finger twist turns the map too: a third of a turn clockwise.
+  - rotate: { id: map_canvas, rotation: 2.1, steps: 8 }
+  - pause: { secs: 1.0 }
+  - assert_text: { id: map_bearing, text: "Bearing 116°" }
+  - screenshot: map-twisted
+  - tap: { id: map_north }
+  - pause: { secs: 1.0 }
+  - select: { id: map_source, index: 7 } # back home
+  - pause: { secs: 1.0 }
+
+  # The buttons step a whole level and keep the center.
+  - tap: { id: map_zoom_out }
+  - tap: { id: map_zoom_out }
+  - assert_text: { id: map_position, text: "0.0000, 0.0000 at zoom 7.00" }
+  - pause: { secs: 1.5 }
+  - screenshot: map-zoomed-out
+
+  # A drag moves the content with the pointer: dragging left brings the east coast into view.
+  - drag: { id: map_canvas, from: [400, 300], to: [150, 300], steps: 8 }
+  - pause: { secs: 1.5 }
+  - assert_visible: { id: map_position }
+  - screenshot: map-dragged
+
+  # A pinch zooms about its center: two levels in.
+  - pinch: { id: map_canvas, scale: 4.0, steps: 6 }
+  - pause: { secs: 1.5 }
+  - screenshot: map-pinched
+
+  # Wheel and trackpad pans arrive as pan events; they move the content too: this one brings
+  # the capital under the center.
+  - pan: { id: map_canvas, by: [1140, 80], steps: 8 }
+  - pause: { secs: 1.0 }
+  - tap: { id: map_zoom_in }
+  - pause: { secs: 1.5 }
+  - assert_visible: { id: map_frame }
+  - screenshot: map-town
+
+  # The island is named in French too: the language picker reloads the style with its labels
+  # preferring `name:fr`, and the labels change.
+  - select: { id: map_language, index: 21 }
+  - pause: { secs: 2.0 }
+  - assert_text: { id: map_status, text: "Ready" }
+  - screenshot: map-town-fr
+
+  # The real Liberty style, from the recording in the piece's test data: London around
+  # Trafalgar Square draws with no network, and a tap reports what the style drew there.
+  - select: { id: map_source, index: 8 }
+  - pause: { secs: 3.0 }
+  - assert_text: { id: map_status, text: "Ready" }
+  - screenshot: map-london
+  - tap: { id: map_canvas }
+  - pause: { secs: 0.8 }
+  - assert_visible: { id: map_tap }
+  - screenshot: map-london-tapped

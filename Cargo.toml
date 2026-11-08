@@ -1,0 +1,46 @@
+[package]
+name = "day-piece-map"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "A vector map piece for Day apps: MapLibre styles and vector tiles, drawn on the canvas"
+repository = "https://github.com/daybrite/day-piece-map"
+license = "MPL-2.0"
+
+# An external Day Piece (https://daybrite.dev/contributing/extending) with no native half. The map
+# is recorded as a `Draw` display list and replayed by whatever backend the app runs on, so this
+# crate carries no per-toolkit code and no `[features]` for backends: the same style, the same
+# tiles and the same placement on every target, the web included.
+#
+# What it draws is a MapLibre style (https://maplibre.org/maplibre-style-spec/) over Mapbox Vector
+# Tiles. The style's expressions, its sources and the tile decoding follow MapLibre GL JS, and the
+# expression test fixtures under tests/data are MapLibre's own (tests/data/README.md).
+#
+# Daybrite-owned dependencies accept every stable 0.x release. Apps retain a tested dependency
+# set with Cargo.lock; updating it may require source changes.
+
+[package.metadata.day]
+# Accept the pre-1.0 series; source compatibility between releases is not guaranteed.
+compat = "0.*"
+
+[dependencies]
+day-spec = "0.*"
+day-core = "0.*"
+day-pieces = "0.*"
+day-reactive = "0.*"
+day-geometry = "0.*"
+# Tiles, TileJSON, PMTiles ranges, sprites and the style itself all arrive over HTTP, through the
+# platform stack on every target (docs/http.md); its `Simulation` is what the tests intercept with.
+day-part-http = "0.*"
+# Tiles are decoded and filtered off the UI thread (inline on the web, which has no thread).
+day-async = "0.*"
+# A style is JSON: the layers, their expressions, the sources, the sprite reference.
+serde_json = "1"
+# A failed tile or sprite is a warning in the app's log, not a crash and not silence.
+log = "0.4"
+# PMTiles directories and tiles are gzip-compressed inside the archive (the HTTP transports decode
+# transfer encodings themselves, so this is the only inflate the crate needs). Pure Rust.
+miniz_oxide = "0.8"
+
+[dev-dependencies]
+day-mock = "0.*"

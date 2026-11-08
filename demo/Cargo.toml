@@ -1,0 +1,40 @@
+[package]
+name = "day-piece-map-demo"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[features]
+# `mock` keeps bare cargo and rust-analyzer compiling; `day build` overrides it with
+# `--no-default-features --features <backend>` (https://daybrite.dev/docs/reference/project-structure).
+default = ["mock"]
+appkit = ["day/appkit"]
+gtk = ["day/gtk"]
+qt = ["day/qt"]
+uikit = ["day/uikit"]
+material = ["day/material"]
+winui = ["day/winui"]
+arkui = ["day/arkui"]
+dom = ["day/dom"]
+mock = ["day/mock"]
+
+# Cargo defaults to rlib; the mobile pipeline requests staticlib/cdylib via `cargo rustc`.
+[lib]
+# A constant lib name: staged artifacts and the `dayapp::` import never move on a package rename.
+name = "dayapp"
+
+[dependencies]
+day = { package = "day-app", version = "0.*" }
+day-piece-map = { version = "0.*", path = ".." }
+# The built-in sample is served through the HTTP part's interception (src/sample.rs).
+day-part-http = "0.*"
+day-geometry = "0.*"
+
+[build-dependencies]
+day-build = { version = "0.*" }
+
+
+[workspace]
+
+[workspace.package]
+version = "0.1.0"

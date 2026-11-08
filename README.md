@@ -115,7 +115,7 @@ before them.
 
 Icons and `fill-pattern` draw from the style's sprite, which the canvas cuts regions of on every
 Day toolkit. Not drawn: `raster`, `hillshade`, `heatmap` and `sky` layers, `line-pattern`,
-`line-gap-width` (the width is drawn, the gap is not), pitch and bearing.
+`line-gap-width` (the width is drawn, the gap is not), and pitch; bearing is drawn, as the two-finger twist shows.
 
 ## Testing
 

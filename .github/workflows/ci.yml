@@ -1,0 +1,38 @@
+name: ci
+
+# The shared Day library workflow (daybrite/actions' daylib.yml) reads what to check from this
+# repository's manifests: clippy and test on Linux, macOS and Windows, with each toolkit feature on
+# the OS it draws on; clippy for the mobile and web targets demo/Day.toml declares, and the demo's
+# walkthrough on every one of them. A push builds against the head of day's main and of every other
+# Day repository it uses; the nightly run builds against the newest releases on crates.io. A version
+# tag publishes the piece once the host and cross-target checks pass.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      day-main:
+        description: Build against day's main branch instead of the newest release
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: daybrite/actions/.github/workflows/daylib.yml@v1
+    permissions:
+      contents: write # the demo's release assets on a version tag
+      pages: write # the project website
+      id-token: write # crates.io Trusted Publishing, and the Pages deploy
+    secrets: inherit
+    with:
+      day-main: ${{ inputs.day-main || false }}
+      scripts: dayscript/demo.yaml
+      themes: light dark
+      deploy-web: true
