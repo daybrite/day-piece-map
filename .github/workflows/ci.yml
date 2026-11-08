@@ -18,7 +18,8 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 1 * * *" # 01:00 Eastern; staggered across daybrite.
+      timezone: America/New_York
 
 permissions:
   contents: read

@@ -29,7 +29,7 @@ use day_piece_map::{LngLat, MapView, Marker, map};
 fn page() -> impl Piece {
     let view = MapView::new(LngLat::new(-0.1276, 51.5072), 12.0);
     column((
-        map("https://tiles.openfreemap.org/styles/liberty", view).grow(),
+        map("https://tiles.openfreemap.org/styles/liberty", view).grow(Dimension::Both),
         label(move || view.attribution.get()).font(Font::Caption),
     ))
 }

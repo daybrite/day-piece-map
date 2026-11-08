@@ -24,7 +24,7 @@
 //!
 //! fn page() -> impl Piece {
 //!     let view = MapView::new(LngLat::new(-0.1276, 51.5072), 11.0);
-//!     map("<https://tiles.openfreemap.org/styles/liberty",> view).grow()
+//!     map("<https://tiles.openfreemap.org/styles/liberty",> view).grow(Dimension::Both)
 //! }
 //! ```
 

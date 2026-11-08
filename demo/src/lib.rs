@@ -377,7 +377,7 @@ pub fn root() -> impl Piece {
         header,
         source_row,
         camera_row,
-        map(style, view).id(id!(map_canvas)).grow(),
+        map(style, view).id(id!(map_canvas)).grow(Dimension::Both),
         row((status, position)).spacing(Space::M),
         row((frame, tap)).spacing(Space::M),
     ))
