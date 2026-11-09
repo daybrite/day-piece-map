@@ -1,6 +1,6 @@
 [package]
 name = "day-piece-map"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.89"
 description = "A vector map piece for Day apps: MapLibre styles and vector tiles, drawn on the canvas"
