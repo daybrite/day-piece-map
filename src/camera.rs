@@ -46,6 +46,7 @@ impl LngLat {
 
     /// The same position with the longitude wrapped into `-180..=180` and the latitude held to
     /// the projection's range.
+    #[must_use]
     pub fn wrapped(self) -> LngLat {
         let mut lng = self.lng;
         while lng > 180.0 {
@@ -77,6 +78,7 @@ impl LngLat {
 
 /// A view of the map: where it looks, how close, which way is up, and how big the viewport is.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[must_use]
 pub struct Camera {
     pub center: LngLat,
     pub zoom: f64,
@@ -201,7 +203,7 @@ impl Camera {
         let d = self.unturn(Point::new(m.x + delta.x, m.y + delta.y));
         let moved = Point::new(c.x - (d.x - m.x) / s, c.y - (d.y - m.y) / s);
         Camera::with_bearing(
-            LngLat::from_world(self.clamp_world(moved)),
+            LngLat::from_world(Self::clamp_world(moved)),
             self.zoom,
             self.bearing,
             self.size,
@@ -228,7 +230,7 @@ impl Camera {
         let a = self.unturn(anchor);
         let center = Point::new(world.x - (a.x - m.x) / s, world.y - (a.y - m.y) / s);
         Camera::with_bearing(
-            LngLat::from_world(self.clamp_world(center)),
+            LngLat::from_world(Self::clamp_world(center)),
             self.zoom,
             self.bearing,
             self.size,
@@ -244,7 +246,8 @@ impl Camera {
         let avail_w = (size.width - 2.0 * padding).max(1.0);
         let avail_h = (size.height - 2.0 * padding).max(1.0);
         let zoom = (avail_w / w).min(avail_h / h).log2().clamp(0.0, MAX_ZOOM);
-        let center = LngLat::from_world(Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0));
+        let center =
+            LngLat::from_world(Point::new(f64::midpoint(a.x, b.x), f64::midpoint(a.y, b.y)));
         Camera::new(center, zoom, size)
     }
 
@@ -255,7 +258,7 @@ impl Camera {
 
     /// Keep the center inside the world vertically (the map never shows past the poles);
     /// longitude wraps on its own.
-    fn clamp_world(&self, p: Point) -> Point {
+    fn clamp_world(p: Point) -> Point {
         let mut x = p.x;
         while x < 0.0 {
             x += WORLD;

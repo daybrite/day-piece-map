@@ -320,7 +320,7 @@ pub fn root() -> impl Piece {
         None => res::str::tap_prompt().format(),
         Some(t) => {
             if let Some(id) = t.marker {
-                let title = view.marker(id).map(|m| m.title).unwrap_or_default();
+                let title = view.marker(id).map_or_default(|m| m.title);
                 return res::str::tap_marker(title).format();
             }
             match t.features.first() {
@@ -330,11 +330,10 @@ pub fn root() -> impl Piece {
                         .properties
                         .get("name")
                         .or_else(|| f.properties.get("class"))
-                        .map(|v| match v {
+                        .map_or_default(|v| match v {
                             day_piece_map::Value::String(s) => s.clone(),
                             other => format!("{other:?}"),
-                        })
-                        .unwrap_or_default();
+                        });
                     res::str::tap_feature(res::str::TapFeature {
                         layer: f.layer.clone(),
                         name,

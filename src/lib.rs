@@ -6,7 +6,7 @@
 //!
 //! An external Day Piece with **no native half**. Every frame is recorded as a `Draw` display
 //! list and replayed by whichever backend the app runs on, so the map looks the same on every
-//! target because it *is* the same. There is no per-toolkit map code and no WebView.
+//! target because it *is* the same. There is no per-toolkit map code and no `WebView`.
 //!
 //! The design follows [MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js): a
 //! [`style::Style`] is a MapLibre style document (sources, layers, filters, paint and layout

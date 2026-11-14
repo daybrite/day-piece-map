@@ -22,6 +22,7 @@ use day_geometry::Color;
 use serde_json::Value as Json;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 /// The type an expression produces, as the style spec names them.
 #[derive(Clone, Debug, PartialEq)]
@@ -318,10 +319,9 @@ fn js_string(value: &Value) -> String {
 /// `JSON.stringify(value)`.
 fn json_text(value: &Value) -> String {
     match value {
-        Value::Null => "null".into(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) if n.is_finite() => js_number(*n),
-        Value::Number(_) => "null".into(),
+        Value::Null | Value::Number(_) => "null".into(),
         Value::String(s) => serde_json::to_string(s).unwrap_or_default(),
         Value::Color(c) => format!(
             "{{\"r\":{},\"g\":{},\"b\":{},\"a\":{}}}",
@@ -821,7 +821,7 @@ fn find_zoom_curve(e: &Expr) -> Result<Option<&Expr>, String> {
             (_, Err(err)) => state = Err(err),
             (Ok(None), Ok(Some(_))) => state = Err(ZOOM_TOP_LEVEL.into()),
             (Ok(Some(found)), Ok(Some(child_found))) if !std::ptr::eq(*found, child_found) => {
-                state = Err(ZOOM_ONLY_ONE.into())
+                state = Err(ZOOM_ONLY_ONE.into());
             }
             (Err(_), Ok(Some(_))) => state = Err(ZOOM_ONLY_ONE.into()),
             _ => {}
@@ -1052,13 +1052,22 @@ struct Parser {
     errors: Vec<ParseError>,
 }
 
+/// Each index as `[i]`, joined: the key MapLibre reports a parse error under.
+fn bracketed(path: &[usize]) -> String {
+    let mut out = String::new();
+    for i in path {
+        let _ = write!(out, "[{i}]");
+    }
+    out
+}
+
 impl Parser {
     fn key(&self) -> String {
-        self.path.iter().map(|i| format!("[{i}]")).collect()
+        bracketed(&self.path)
     }
 
     fn error(&mut self, message: impl Into<String>, extra: &[usize]) {
-        let key: String = self.key() + &extra.iter().map(|i| format!("[{i}]")).collect::<String>();
+        let key: String = self.key() + &bracketed(extra);
         self.errors.push(ParseError {
             key,
             message: message.into(),
@@ -1796,7 +1805,7 @@ impl Parser {
                 let (label_key, label_type) = match label {
                     Json::Number(n) => {
                         let n = n.as_f64().unwrap_or(f64::NAN);
-                        if n.abs() > 9007199254740991.0 {
+                        if n.abs() > 9_007_199_254_740_991.0 {
                             self.error(
                                 "Branch labels must be integers no larger than 9007199254740991.",
                                 &[i],
@@ -1881,19 +1890,16 @@ impl Parser {
         while i < args.len() {
             let label = if name == "step" && i == 1 {
                 f64::NEG_INFINITY
+            } else if let Some(n) = args[i].as_f64() {
+                n
             } else {
-                match args[i].as_f64() {
-                    Some(n) => n,
-                    None => {
-                        self.error(
-                            format!(
-                                "Input/output pairs for \"{name}\" expressions must be defined using literal numeric values (not computed expressions) for the input values."
-                            ),
-                            &[i],
-                        );
-                        return None;
-                    }
-                }
+                self.error(
+                    format!(
+                        "Input/output pairs for \"{name}\" expressions must be defined using literal numeric values (not computed expressions) for the input values."
+                    ),
+                    &[i],
+                );
+                return None;
             };
             if labels.last().is_some_and(|last| *last >= label) {
                 self.error(
@@ -1963,16 +1969,17 @@ impl Parser {
         };
         let interpolation = match spec[0].as_str() {
             Some("linear") => Interpolation::Linear,
-            Some("exponential") => match spec.get(1).and_then(Json::as_f64) {
-                Some(base) => Interpolation::Exponential(base),
-                None => {
+            Some("exponential") => {
+                if let Some(base) = spec.get(1).and_then(Json::as_f64) {
+                    Interpolation::Exponential(base)
+                } else {
                     self.error(
                         "Exponential interpolation requires a numeric base.",
                         &[1, 1],
                     );
                     return None;
                 }
-            },
+            }
             Some("cubic-bezier") => {
                 let points: Vec<f64> = spec[1..].iter().filter_map(Json::as_f64).collect();
                 if points.len() != 4
@@ -2018,10 +2025,10 @@ impl Parser {
             "interpolate-lab" => ColorSpace::Lab,
             _ => ColorSpace::Rgb,
         };
-        let mut output_type = if space != ColorSpace::Rgb {
-            Some(Type::Color)
-        } else {
+        let mut output_type = if space == ColorSpace::Rgb {
             expected.filter(|t| **t != Type::Value).cloned()
+        } else {
+            Some(Type::Color)
         };
         let (labels, outputs) = self.parse_stops("interpolate", args, 3, &mut output_type)?;
         let ty = output_type.unwrap_or(Type::Value);
@@ -2279,12 +2286,11 @@ impl Parser {
         self.path.push(1);
         let mut parsed = Vec::new();
         for (i, item) in items.iter().enumerate() {
-            match self.parse(item, Some(i), Some(&Type::Value), Annotation::Assert) {
-                Some(e) => parsed.push(e),
-                None => {
-                    self.path.pop();
-                    return None;
-                }
+            if let Some(e) = self.parse(item, Some(i), Some(&Type::Value), Annotation::Assert) {
+                parsed.push(e);
+            } else {
+                self.path.pop();
+                return None;
             }
         }
         self.path.pop();
@@ -2333,17 +2339,16 @@ impl Parser {
             let mut failed = false;
             for arg in &args[1..] {
                 let expected = sig.param(parsed.len());
-                match self.parse(
+                if let Some(e) = self.parse(
                     arg,
                     Some(1 + parsed.len()),
                     Some(expected),
                     Annotation::Assert,
                 ) {
-                    Some(e) => parsed.push(e),
-                    None => {
-                        failed = true;
-                        break;
-                    }
+                    parsed.push(e);
+                } else {
+                    failed = true;
+                    break;
                 }
             }
             if !failed {
@@ -2462,7 +2467,7 @@ fn find_stop(stops: &[f64], input: f64, key: &str) -> Result<usize, RuntimeError
     let last = stops.len().saturating_sub(1);
     let (mut lower, mut upper) = (0i64, last as i64);
     while lower <= upper {
-        let current = ((lower + upper) / 2) as usize;
+        let current = i64::midpoint(lower, upper) as usize;
         let value = stops[current];
         if value <= input {
             if current == last || input < stops[current + 1] {
@@ -2478,6 +2483,10 @@ fn find_stop(stops: &[f64], input: f64, key: &str) -> Result<usize, RuntimeError
     Ok(0)
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "a base of exactly 1 selects the linear case, as in MapLibre"
+)]
 fn exponential_interpolation(input: f64, base: f64, lower: f64, upper: f64) -> f64 {
     let difference = upper - lower;
     let progress = input - lower;
@@ -2597,15 +2606,19 @@ fn xyz_to_rgb(x: f64) -> f64 {
 }
 
 /// `[l, a, b, alpha]` of a straight-alpha color.
+#[expect(
+    clippy::float_cmp,
+    reason = "exactly equal channels mark a gray, which has no hue"
+)]
 fn rgb_to_lab(c: Color) -> [f64; 4] {
     let (r, g, b) = (rgb_to_xyz(c.r), rgb_to_xyz(c.g), rgb_to_xyz(c.b));
-    let y = xyz_to_lab((0.2225045 * r + 0.7168786 * g + 0.0606169 * b) / YN);
+    let y = xyz_to_lab((0.222_504_5 * r + 0.716_878_6 * g + 0.060_616_9 * b) / YN);
     let (x, z) = if r == g && g == b {
         (y, y)
     } else {
         (
-            xyz_to_lab((0.4360747 * r + 0.3850649 * g + 0.1430804 * b) / XN),
-            xyz_to_lab((0.0139322 * r + 0.0971045 * g + 0.7141733 * b) / ZN),
+            xyz_to_lab((0.436_074_7 * r + 0.385_064_9 * g + 0.143_080_4 * b) / XN),
+            xyz_to_lab((0.013_932_2 * r + 0.097_104_5 * g + 0.714_173_3 * b) / ZN),
         )
     };
     let l = 116.0 * y - 16.0;
@@ -2620,9 +2633,9 @@ fn lab_to_rgb([l, a, b, alpha]: [f64; 4]) -> Color {
     let x = XN * lab_to_xyz(x);
     let z = ZN * lab_to_xyz(z);
     Color::rgba(
-        xyz_to_rgb(3.1338561 * x - 1.6168667 * y - 0.4906146 * z),
-        xyz_to_rgb(-0.9787684 * x + 1.9161415 * y + 0.033454 * z),
-        xyz_to_rgb(0.0719453 * x - 0.2289914 * y + 1.4052427 * z),
+        xyz_to_rgb(3.133_856_1 * x - 1.616_866_7 * y - 0.490_614_6 * z),
+        xyz_to_rgb(-0.978_768_4 * x + 1.916_141_5 * y + 0.033_454 * z),
+        xyz_to_rgb(0.071_945_3 * x - 0.228_991_4 * y + 1.405_242_7 * z),
         alpha,
     )
 }
@@ -2631,10 +2644,10 @@ fn lab_to_rgb([l, a, b, alpha]: [f64; 4]) -> Color {
 fn rgb_to_hcl(c: Color) -> [f64; 4] {
     let [l, a, b, alpha] = rgb_to_lab(c);
     let chroma = (a * a + b * b).sqrt();
-    let h = if (chroma * 10000.0).round() != 0.0 {
-        constrain_angle(b.atan2(a).to_degrees())
-    } else {
+    let h = if (chroma * 10000.0).round() == 0.0 {
         f64::NAN
+    } else {
+        constrain_angle(b.atan2(a).to_degrees())
     };
     [h, chroma, l, alpha]
 }
@@ -2645,6 +2658,10 @@ fn hcl_to_rgb([h, c, l, alpha]: [f64; 4]) -> Color {
 }
 
 /// Blend two straight-alpha colors.
+#[expect(
+    clippy::float_cmp,
+    reason = "lightness of exactly 0 or 1 is the achromatic sentinel"
+)]
 fn interpolate_color(from: Color, to: Color, t: f64, space: ColorSpace) -> Color {
     match space {
         ColorSpace::Rgb => Color::rgba(
@@ -3663,6 +3680,10 @@ impl Expression {
 
     /// Parse an expression (`["get", "name"]`, a literal, or a legacy function object when
     /// `spec` is given) that must produce `expected`, where known.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `json` is not a valid expression or cannot produce `expected`.
     pub fn parse(json: &Json, expected: Option<&Type>) -> Result<Expression, Error> {
         Ok(Expression::from_root(Expression::run_parser(
             json, expected,
@@ -3676,11 +3697,20 @@ impl Expression {
     /// Beyond [`Expression::parse`], this enforces the property rules: a feature-dependent
     /// expression on a property that is not data-driven is an error, and `["zoom"]` may only
     /// feed a top-level `step` or `interpolate` (through `let` and `coalesce`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `json` is not a valid value, expression or legacy function for the
+    /// property, or breaks the property rules above.
     pub fn parse_property(json: &Json, spec: &PropertySpec) -> Result<Expression, Error> {
         Expression::parse_property_with(json, spec, spec.function_hints())
     }
 
     /// [`Expression::parse_property`] with explicit hints for a legacy function.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors [`Expression::parse_property`] returns.
     pub fn parse_property_with(
         json: &Json,
         spec: &PropertySpec,
@@ -3718,6 +3748,10 @@ impl Expression {
     ///
     /// A filter never fails to evaluate: a runtime error (a type mismatch in a comparison, say)
     /// makes it `false`, as the legacy syntax always was for mismatched types.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `json` is neither a valid expression nor a valid legacy filter.
     pub fn parse_filter(json: &Json) -> Result<Expression, Error> {
         let converted;
         let json = if json.is_null() {
@@ -3739,6 +3773,10 @@ impl Expression {
     }
 
     /// Evaluate against `ctx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when evaluation fails at run time, such as a type mismatch.
     pub fn evaluate(&self, ctx: &Context<'_>) -> Result<Value, Error> {
         match self.root.eval(ctx) {
             Ok(value) => Ok(value),
@@ -4055,6 +4093,10 @@ fn value_to_json(value: &Value) -> Json {
 }
 
 /// Convert a legacy function object to the equivalent expression.
+///
+/// # Errors
+///
+/// Returns an error when `parameters` is not a valid legacy function object.
 pub fn convert_function(
     parameters: &Json,
     spec: &PropertySpec,
@@ -4163,6 +4205,10 @@ fn fixup_degenerate_step(curve: &mut Vec<Json>) {
     }
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "a base of exactly 1 selects the linear case, as in MapLibre"
+)]
 fn convert_property_function(
     parameters: &Json,
     spec: &PropertySpec,
@@ -4236,6 +4282,10 @@ fn convert_property_function(
     })
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "a base of exactly 1 selects the linear case, as in MapLibre"
+)]
 fn convert_zoom_function(
     parameters: &Json,
     _spec: &PropertySpec,
@@ -4521,6 +4571,10 @@ fn parse_hsl_function(inner: &str) -> Option<Color> {
 }
 
 /// The CSS named colors (<https://www.w3.org/TR/css-color-4/#named-colors>).
+#[expect(
+    clippy::match_same_arms,
+    reason = "the named-color table keeps one arm per CSS name, in alphabetical order"
+)]
 fn named_color(name: &str) -> Option<(u8, u8, u8)> {
     Some(match name {
         "aliceblue" => (240, 248, 255),
@@ -4797,7 +4851,7 @@ mod tests {
     #[test]
     fn formats_numbers() {
         assert_eq!(
-            format_number(123456.789, None, None, None, None),
+            format_number(123_456.789, None, None, None, None),
             "123,456.789"
         );
         assert_eq!(
@@ -4810,7 +4864,7 @@ mod tests {
             "1,000"
         );
         assert_eq!(
-            format_number(123456.789, Some("JPY"), None, None, None),
+            format_number(123_456.789, Some("JPY"), None, None, None),
             "¥123,457"
         );
         assert_eq!(
@@ -4832,6 +4886,10 @@ mod tests {
 
     // --- filters, after maplibre-style-spec/src/feature_filter/feature_filter.test.ts ---
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a test helper that takes the `json!` value its callers build in place"
+    )]
     fn feature(properties: Json) -> Feature {
         Feature {
             id: None,
@@ -4855,6 +4913,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a test helper that takes the `json!` value its callers build in place"
+    )]
     fn with_id(id: Json) -> Feature {
         Feature {
             id: Some(Value::from_json(&id)),
@@ -4863,6 +4925,10 @@ mod tests {
     }
 
     /// Compile a filter and evaluate it against a feature at a zoom.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a test helper that takes the `json!` value its callers build in place"
+    )]
     fn filter(json: Json) -> impl Fn(f64, &Feature) -> bool {
         let compiled = match Expression::parse_filter(&json) {
             Ok(e) => e,
@@ -5144,6 +5210,10 @@ mod tests {
 
     /// The ordering operators against `0` and `"0"`, each over the reference's input table:
     /// `[1, 0, -1, "1", "0", "-1", true, false, null, missing]`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a test helper that takes the `json!` value its callers build in place"
+    )]
     fn ordering_table(op: &str, value: Json, expected: [bool; 10]) {
         let f = filter(json!([op, "foo", value]));
         let inputs = [

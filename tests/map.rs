@@ -287,6 +287,10 @@ fn gestures_move_the_view() {
 }
 
 #[test]
+#[expect(
+    clippy::float_cmp,
+    reason = "the fling has settled when the longitude stops changing at all"
+)]
 fn a_swipe_glides_on_and_a_touch_stops_it() {
     let f = boot();
     f.settle();
@@ -472,7 +476,7 @@ fn taps_report_markers_and_features_and_a_double_tap_zooms() {
     let mut t = run_frames(&f, 1.0, 0.5);
     let hit = f.view.tap.get_untracked().expect("a tap was reported");
     assert_eq!(hit.marker, Some(id));
-    assert!(hit.features.is_empty());
+    assert_eq!(hit.features, [] as [day_piece_map::FeatureHit; 0]);
     // Off the marker: the features drawn there. The test tile fills the whole world with the
     // "land" polygon, so something is always under a tap.
     tap(Point::new(100.0, 400.0));

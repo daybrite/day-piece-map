@@ -44,6 +44,7 @@ pub struct MarkerId(u64);
 /// A pin on the map at a position, with an optional title shown beside it and a tag the app
 /// uses to know it again when it is tapped.
 #[derive(Clone, Debug, PartialEq)]
+#[must_use]
 pub struct Marker {
     pub position: LngLat,
     pub title: String,
@@ -610,19 +611,16 @@ pub fn map_with_client<M>(
         move |drag: Drag| {
             let delta = {
                 let mut st = shared.state.borrow_mut();
-                match drag.phase {
-                    DragPhase::Began => {
-                        st.drag_last = drag.translation;
-                        Point::ZERO
-                    }
-                    _ => {
-                        let d = Point::new(
-                            drag.translation.x - st.drag_last.x,
-                            drag.translation.y - st.drag_last.y,
-                        );
-                        st.drag_last = drag.translation;
-                        d
-                    }
+                if drag.phase == DragPhase::Began {
+                    st.drag_last = drag.translation;
+                    Point::ZERO
+                } else {
+                    let d = Point::new(
+                        drag.translation.x - st.drag_last.x,
+                        drag.translation.y - st.drag_last.y,
+                    );
+                    st.drag_last = drag.translation;
+                    d
                 }
             };
             match drag.phase {
@@ -788,6 +786,10 @@ fn stop_motion(st: &mut State) {
 
 /// The pinch lifted at `zoom`: keep zooming with the speed of its last tenth of a second,
 /// decaying, about the point it was at, the way Apple Maps and Google Maps carry a pinch on.
+#[expect(
+    clippy::float_cmp,
+    reason = "an unchanged zoom is detected by exact equality with the value it was computed from"
+)]
 fn end_pinch(shared: &Rc<Shared>, zoom: f64, now: f64) {
     let (velocity, anchor) = {
         let mut st = shared.state.borrow_mut();
@@ -908,6 +910,10 @@ fn report_tap(shared: &Rc<Shared>, point: Point) {
 /// Glide from the current view to `target` over `duration` seconds: an ease-in-out on the
 /// center, zoom and bearing, with a long flight dipping out to a zoom that shows both ends,
 /// as MapLibre's `flyTo` does. `0.0` jumps.
+#[expect(
+    clippy::float_cmp,
+    reason = "an animation is skipped only when the target is exactly the current camera"
+)]
 fn animate_to(shared: &Rc<Shared>, target: Camera, duration: f64) {
     let from = camera_now(shared);
     {
@@ -1071,6 +1077,10 @@ fn camera_now(shared: &Rc<Shared>) -> Camera {
 
 /// Move to `camera` at the next display frame. Several events in one frame leave one camera,
 /// one signal write and one re-record.
+#[expect(
+    clippy::float_cmp,
+    reason = "the bearing signal is written only when the value differs at all"
+)]
 fn move_to(shared: &Rc<Shared>, camera: Camera) {
     let mut st = shared.state.borrow_mut();
     st.pending = Some(camera);
@@ -1259,7 +1269,7 @@ fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
                 st.tiles.remove(&key);
             }
         }
-        st.frame_tiles = tiles.clone();
+        st.frame_tiles.clone_from(&tiles);
         drop(st);
         if !to_fetch.is_empty() {
             let n = shared.view.pending.get_untracked() + to_fetch.len();
@@ -1312,35 +1322,32 @@ fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
                 }
                 _ => None,
             };
-            match ready {
-                Some(bitmap) => {
-                    // A turned layer shows a hairline between neighbours where their edges
-                    // are smoothed; a half-point overlap hides it.
-                    let rect = if bearing != 0.0 {
-                        Rect::new(
-                            rect.origin.x - 0.5,
-                            rect.origin.y - 0.5,
-                            rect.size.width + 1.0,
-                            rect.size.height + 1.0,
-                        )
-                    } else {
-                        rect
-                    };
-                    d.image(&bitmap, rect);
-                    blits += 1;
-                }
-                None => {
-                    if !data.is_empty() {
-                        let fresh = st.rasters.get(id).is_none_or(|r| r.data != key);
-                        let pending = st.rasters.get(id).is_some_and(|r| r.pending);
-                        if fresh && !pending {
-                            let dx = rect.origin.x + rect.size.width / 2.0 - center.x;
-                            let dy = rect.origin.y + rect.size.height / 2.0 - center.y;
-                            queue.push((dx * dx + dy * dy, *id, data.clone()));
-                        }
+            if let Some(bitmap) = ready {
+                // A turned layer shows a hairline between neighbours where their edges
+                // are smoothed; a half-point overlap hides it.
+                let rect = if bearing == 0.0 {
+                    rect
+                } else {
+                    Rect::new(
+                        rect.origin.x - 0.5,
+                        rect.origin.y - 0.5,
+                        rect.size.width + 1.0,
+                        rect.size.height + 1.0,
+                    )
+                };
+                d.image(&bitmap, rect);
+                blits += 1;
+            } else {
+                if !data.is_empty() {
+                    let fresh = st.rasters.get(id).is_none_or(|r| r.data != key);
+                    let pending = st.rasters.get(id).is_some_and(|r| r.pending);
+                    if fresh && !pending {
+                        let dx = rect.origin.x + rect.size.width / 2.0 - center.x;
+                        let dy = rect.origin.y + rect.size.height / 2.0 - center.y;
+                        queue.push((dx * dx + dy * dy, *id, data.clone()));
                     }
-                    blits += draw_stand_in(d, &mut st.rasters, *id, rect, frame_no);
                 }
+                blits += draw_stand_in(d, &mut st.rasters, *id, rect, frame_no);
             }
         }
         // Nearest the center renders first.
@@ -1447,7 +1454,7 @@ fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
                 size: 13.0,
                 color: Color::rgb(0.4, 0.4, 0.4),
                 anchor: TextAnchor::CENTERED,
-                font: Default::default(),
+                font: CanvasFont::default(),
             },
         );
     }
@@ -1529,7 +1536,7 @@ fn place_labels(
                 log::debug!(
                     "day-piece-map: labels at frame {frame_no}: placed in {:.1} ms, painted in {:.1} ms, {stats:?}",
                     placed.as_secs_f64() * 1000.0,
-                    (started.elapsed() - placed).as_secs_f64() * 1000.0
+                    started.elapsed().checked_sub(placed).unwrap().as_secs_f64() * 1000.0
                 );
                 st.labels = Some(LabelLayer {
                     bitmap,
@@ -1694,7 +1701,12 @@ fn start_raster(shared: Rc<Shared>, id: TileId, data: DataTiles) {
         }
         match result {
             Ok(bitmap) => {
-                let painted = (started.elapsed() - recorded).as_secs_f64() * 1000.0;
+                let painted = started
+                    .elapsed()
+                    .checked_sub(recorded)
+                    .unwrap()
+                    .as_secs_f64()
+                    * 1000.0;
                 log::debug!(
                     "day-piece-map: raster {id:?}: recorded in {:.1} ms, painted in {:.1} ms at {scale}x ({} ops, {} fills, {} strokes, {} segments, {} images)",
                     recorded.as_secs_f64() * 1000.0,
@@ -2001,7 +2013,12 @@ fn fetch_tile(shared: Rc<Shared>, name: String, id: TileId) {
                         log::debug!(
                             "day-piece-map: tile {name} {id:?}: {size} bytes, fetched in {:.0} ms, decoded and bucketed in {:.1} ms {}",
                             fetched.as_secs_f64() * 1000.0,
-                            (started.elapsed() - fetched).as_secs_f64() * 1000.0,
+                            started
+                                .elapsed()
+                                .checked_sub(fetched)
+                                .unwrap()
+                                .as_secs_f64()
+                                * 1000.0,
                             if cfg!(target_arch = "wasm32") {
                                 "inline (the web has no worker threads)"
                             } else {

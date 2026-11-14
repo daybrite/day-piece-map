@@ -50,6 +50,10 @@ impl Tile {
 const DEFAULT_EXTENT: u32 = 4096;
 
 /// Decode a tile's protobuf bytes (already inflated).
+///
+/// # Errors
+///
+/// Returns an error when the bytes are not a valid vector tile.
 pub fn decode(bytes: &[u8]) -> Result<Tile, Error> {
     let mut reader = Reader::new(bytes);
     let mut layers = Vec::new();
@@ -465,45 +469,42 @@ fn encode_geometry(feature: &Feature) -> Vec<u32> {
         cx = ix;
         cy = iy;
     };
-    match feature.kind {
-        GeometryType::Point => {
-            let points: Vec<Point> = feature
-                .geometry
-                .iter()
-                .filter_map(|part| part.first().copied())
-                .collect();
-            if !points.is_empty() {
-                out.push((points.len() as u32) << 3 | 1);
-                for p in points {
-                    push(&mut out, p);
-                }
+    if feature.kind == GeometryType::Point {
+        let points: Vec<Point> = feature
+            .geometry
+            .iter()
+            .filter_map(|part| part.first().copied())
+            .collect();
+        if !points.is_empty() {
+            out.push((points.len() as u32) << 3 | 1);
+            for p in points {
+                push(&mut out, p);
             }
         }
-        _ => {
-            let closed = feature.kind == GeometryType::Polygon;
-            for part in &feature.geometry {
-                let mut points: Vec<Point> = Vec::new();
-                for p in part {
-                    let q = Point::new(p.x.round(), p.y.round());
-                    if points.last() != Some(&q) {
-                        points.push(q);
-                    }
+    } else {
+        let closed = feature.kind == GeometryType::Polygon;
+        for part in &feature.geometry {
+            let mut points: Vec<Point> = Vec::new();
+            for p in part {
+                let q = Point::new(p.x.round(), p.y.round());
+                if points.last() != Some(&q) {
+                    points.push(q);
                 }
-                if closed && points.len() > 1 && points.first() == points.last() {
-                    points.pop();
-                }
-                if points.len() < 2 {
-                    continue;
-                }
-                out.push(1 << 3 | 1);
-                push(&mut out, points[0]);
-                out.push(((points.len() - 1) as u32) << 3 | 2);
-                for &p in &points[1..] {
-                    push(&mut out, p);
-                }
-                if closed {
-                    out.push(1 << 3 | 7);
-                }
+            }
+            if closed && points.len() > 1 && points.first() == points.last() {
+                points.pop();
+            }
+            if points.len() < 2 {
+                continue;
+            }
+            out.push(1 << 3 | 1);
+            push(&mut out, points[0]);
+            out.push(((points.len() - 1) as u32) << 3 | 2);
+            for &p in &points[1..] {
+                push(&mut out, p);
+            }
+            if closed {
+                out.push(1 << 3 | 7);
             }
         }
     }
@@ -730,7 +731,7 @@ mod tests {
             Val::Double(-2.25),
             Val::Int(-7),
             Val::Uint(9_000_000_000),
-            Val::Sint(-123456789012),
+            Val::Sint(-123_456_789_012),
             Val::Bool(true),
             Val::Bool(false),
         ];
@@ -756,7 +757,7 @@ mod tests {
         assert_eq!(p["d"], Value::Number(-2.25));
         assert_eq!(p["i"], Value::Number(-7.0));
         assert_eq!(p["u"], Value::Number(9_000_000_000.0));
-        assert_eq!(p["si"], Value::Number(-123456789012.0));
+        assert_eq!(p["si"], Value::Number(-123_456_789_012.0));
         assert_eq!(p["t"], Value::Bool(true));
         assert_eq!(p["ff"], Value::Bool(false));
     }
@@ -881,7 +882,7 @@ mod tests {
         assert!(t.layer("water").is_some());
         let bare = t.layer("bare").expect("bare layer");
         assert_eq!((bare.version, bare.extent), (1, 4096));
-        assert!(bare.features.is_empty());
+        assert_eq!(bare.features, [] as [Feature; 0]);
         assert!(t.layer("roads").is_none());
     }
 
@@ -1025,7 +1026,7 @@ mod tests {
         // Deprecated group wire types.
         assert!(matches!(decode(&[(3 << 3) | 3]), Err(Error::Invalid(_))));
         // Random-ish bytes.
-        let mut seed = 0x9e3779b97f4a7c15u64;
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
         for _ in 0..200 {
             let mut buf = Vec::new();
             for _ in 0..32 {
@@ -1045,8 +1046,8 @@ mod tests {
         assert_eq!(zigzag32(2), 1);
         assert_eq!(zigzag32(3), -2);
         assert_eq!(zigzag32(u32::MAX), i32::MIN);
-        assert_eq!(zigzag64(4294967294), 2147483647);
-        assert_eq!(zigzag64(4294967295), -2147483648);
+        assert_eq!(zigzag64(4_294_967_294), 2_147_483_647);
+        assert_eq!(zigzag64(4_294_967_295), -2_147_483_648);
     }
 
     #[test]

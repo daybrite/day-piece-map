@@ -58,7 +58,7 @@ impl TileData {
     fn symbols(&self, key: (usize, u32)) -> Option<Arc<Vec<Candidate>>> {
         self.symbols
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&key)
             .cloned()
     }
@@ -66,7 +66,7 @@ impl TileData {
     fn remember_symbols(&self, key: (usize, u32), set: Arc<Vec<Candidate>>) {
         self.symbols
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(key, set);
     }
 
@@ -95,7 +95,7 @@ impl TileData {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<usize, Arc<Vec<usize>>>> {
         self.buckets
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Build the buckets of every layer of `style` that reads this tile's `source`, so a
@@ -232,6 +232,10 @@ pub struct Sprite {
 
 impl Sprite {
     /// Parse a sprite index (`{sprite}.json`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the sprite index is malformed.
     pub fn parse_index(
         json: &serde_json::Value,
     ) -> Result<HashMap<String, SpriteImage>, crate::Error> {
@@ -240,7 +244,7 @@ impl Sprite {
             .ok_or_else(|| crate::Error::Invalid("sprite index is not an object".into()))?;
         let mut images = HashMap::new();
         for (name, entry) in obj {
-            let n = |k: &str| entry.get(k).and_then(|v| v.as_f64());
+            let n = |k: &str| entry.get(k).and_then(serde_json::Value::as_f64);
             if let (Some(x), Some(y), Some(width), Some(height)) =
                 (n("x"), n("y"), n("width"), n("height"))
             {
@@ -310,6 +314,10 @@ pub struct Stats {
 }
 
 /// Draw the scene.
+#[expect(
+    clippy::match_same_arms,
+    reason = "the arms are ordered by precedence, so merging them would change which one matches"
+)]
 pub fn render(d: &mut Draw, scene: &Scene<'_>) -> Stats {
     let camera = scene.camera;
     let viewport = Rect::from_size(camera.size);
@@ -1089,7 +1097,7 @@ struct Candidate {
 /// slant the first font's name asks for. (Fonts are named, not shipped, so Noto Sans Bold is
 /// the UI face in bold.)
 pub fn font_for(stack: &[String]) -> CanvasFont {
-    let name = stack.first().map(String::as_str).unwrap_or("");
+    let name = stack.first().map_or("", String::as_str);
     let lower = name.to_ascii_lowercase();
     let weight = if lower.contains("black") || lower.contains("heavy") {
         Some(FontWeight::Black)
@@ -1142,7 +1150,10 @@ fn point_anchors(parts: &[Vec<Point>], kind: GeometryType) -> Vec<Point> {
                 }
                 let area = (maxx - minx) * (maxy - miny);
                 if best.is_none_or(|(a, _)| area > a) {
-                    best = Some((area, Point::new((minx + maxx) / 2.0, (miny + maxy) / 2.0)));
+                    best = Some((
+                        area,
+                        Point::new(f64::midpoint(minx, maxx), f64::midpoint(miny, maxy)),
+                    ));
                 }
             }
             best.map(|(_, p)| vec![p]).unwrap_or_default()
@@ -1182,22 +1193,21 @@ fn place_symbols(
         // zoom-dependent text size within a few percent of what this zoom asks for.
         let zq = (scene.camera.zoom.max(0.0) * 4.0).round() as u32;
         let key = (li, zq);
-        let set = match tile.data.symbols(key) {
-            Some(set) => set,
-            None => {
-                let set = Arc::new(tile_candidates(
-                    scene,
-                    li,
-                    layer,
-                    p,
-                    ctx,
-                    &tile.data,
-                    source_layer,
-                    scale,
-                ));
-                tile.data.remember_symbols(key, set.clone());
-                set
-            }
+        let set = if let Some(set) = tile.data.symbols(key) {
+            set
+        } else {
+            let set = Arc::new(tile_candidates(
+                scene,
+                li,
+                layer,
+                p,
+                ctx,
+                &tile.data,
+                source_layer,
+                scale,
+            ));
+            tile.data.remember_symbols(key, set.clone());
+            set
         };
         for c in set.iter() {
             let mut c = c.clone();
@@ -1405,9 +1415,8 @@ fn tile_candidates(
         }
         let label_length = text
             .as_ref()
-            .map(|t| t.width)
-            .unwrap_or(0.0)
-            .max(icon.as_ref().map(|i| i.width).unwrap_or(0.0));
+            .map_or(0.0, |t| t.width)
+            .max(icon.as_ref().map_or(0.0, |i| i.width));
         let anchors: Vec<Anchor> = if along_line && feature.kind != GeometryType::Point {
             projected
                 .parts
@@ -1595,7 +1604,7 @@ mod tests {
     fn simplify_drops_collinear_points_and_keeps_corners() {
         use day_geometry::Point;
         let road: Vec<Point> = (0..20)
-            .map(|i| Point::new(i as f64 * 5.0, 0.1 * (i % 2) as f64))
+            .map(|i| Point::new(f64::from(i) * 5.0, 0.1 * f64::from(i % 2)))
             .collect();
         let kept = super::simplify(&road, 0.4);
         assert_eq!(kept.len(), 2, "{kept:?}");
@@ -1821,12 +1830,12 @@ mod tests {
     #[test]
     fn line_labels_follow_the_road() {
         let style = Style::parse_str(
-            r##"{ "version": 8,
+            r#"{ "version": 8,
               "sources": { "osm": { "type": "vector", "tiles": ["x/{z}/{x}/{y}"] } },
               "layers": [ { "id": "road-names", "type": "symbol", "source": "osm",
                 "source-layer": "transportation", "filter": ["==", "class", "primary"],
                 "layout": { "symbol-placement": "line", "text-field": "High Street", "text-size": 12,
-                            "symbol-spacing": 200 } } ] }"##,
+                            "symbol-spacing": 200 } } ] }"#,
         )
         .unwrap();
         let camera = Camera::new(LngLat::new(0.0, 0.0), 1.0, Size::new(1024.0, 1024.0));

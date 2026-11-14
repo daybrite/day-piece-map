@@ -307,7 +307,7 @@ fn to_json(value: &Value, result_type: &Type, available_images: &[String]) -> Js
         Value::Image { name, available } => {
             serde_json::json!({ "name": name, "available": available })
         }
-        Value::Collator { .. } => Json::Object(Default::default()),
+        Value::Collator { .. } => Json::Object(serde_json::Map::default()),
     }
 }
 
@@ -324,6 +324,10 @@ fn strip_precision(x: f64) -> f64 {
 
 /// Numbers agree when, truncated to the fixtures' six significant digits, they differ by at
 /// most one unit in the last kept digit (the truncation itself can flip that digit).
+#[expect(
+    clippy::float_cmp,
+    reason = "exactly equal numbers agree without the tolerance check below"
+)]
 fn numbers_agree(actual: f64, expected: f64) -> bool {
     if actual == expected {
         return true;
@@ -479,17 +483,18 @@ fn run_fixture(fixture: &Json) -> Option<String> {
 
 #[test]
 fn maplibre_expression_fixtures() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/expression");
-    let mut files = Vec::new();
-    fixture_files(&root, &mut files);
-    assert!(!files.is_empty(), "no fixtures under {}", root.display());
-
     #[derive(Default)]
     struct Tally {
         passed: usize,
         failed: usize,
         skipped: usize,
     }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/expression");
+    let mut files = Vec::new();
+    fixture_files(&root, &mut files);
+    assert!(!files.is_empty(), "no fixtures under {}", root.display());
+
     let mut by_dir: BTreeMap<String, Tally> = BTreeMap::new();
     let mut failures: Vec<String> = Vec::new();
     let mut skips: Vec<String> = Vec::new();

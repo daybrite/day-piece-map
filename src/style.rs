@@ -271,6 +271,10 @@ pub struct CircleProps {
 }
 
 /// The spec's entry for a property: type, default, and whether it is data-driven.
+#[expect(
+    clippy::match_same_arms,
+    reason = "the property table keeps one arm per style property, grouped by layer type"
+)]
 fn spec(name: &str) -> PropertySpec {
     let number = |d: f64, data: bool| PropertySpec {
         kind: Type::Number,
@@ -288,7 +292,12 @@ fn spec(name: &str) -> PropertySpec {
         data_driven: data,
     };
     let token = |d: &str, values: &[&str], data: bool| PropertySpec {
-        kind: Type::Enum(values.iter().map(|v| v.to_string()).collect()),
+        kind: Type::Enum(
+            values
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+        ),
         default: Some(Value::String(d.to_string())),
         data_driven: data,
     };
@@ -421,11 +430,16 @@ impl Props<'_> {
 
 impl Style {
     /// Compile a style document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the document is not a valid style or uses a feature this crate does
+    /// not implement.
     pub fn parse(json: &serde_json::Value) -> Result<Style, Error> {
         let root = json
             .as_object()
             .ok_or_else(|| Error::Invalid("style is not an object".into()))?;
-        if root.get("version").and_then(|v| v.as_u64()) != Some(8) {
+        if root.get("version").and_then(serde_json::Value::as_u64) != Some(8) {
             return Err(Error::Invalid("style version must be 8".into()));
         }
         let name = root
@@ -465,6 +479,10 @@ impl Style {
     }
 
     /// Compile a style from its JSON text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text is not JSON, and the errors [`Style::parse`] returns.
     pub fn parse_str(text: &str) -> Result<Style, Error> {
         let json: serde_json::Value =
             serde_json::from_str(text).map_err(|e| Error::Invalid(format!("style JSON: {e}")))?;
@@ -559,7 +577,7 @@ fn parse_source(id: &str, json: &serde_json::Value) -> Result<SourceSpec, Error>
     let str_of = |k: &str| obj.get(k).and_then(|v| v.as_str()).map(str::to_string);
     let zoom_of = |k: &str| {
         obj.get(k)
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .map(|z| z.clamp(0.0, 30.0) as u8)
     };
     let tiles = obj
@@ -573,7 +591,7 @@ fn parse_source(id: &str, json: &serde_json::Value) -> Result<SourceSpec, Error>
         })
         .unwrap_or_default();
     let bounds = obj.get("bounds").and_then(|v| v.as_array()).and_then(|b| {
-        let n: Vec<f64> = b.iter().filter_map(|v| v.as_f64()).collect();
+        let n: Vec<f64> = b.iter().filter_map(serde_json::Value::as_f64).collect();
         (n.len() == 4).then(|| [n[0], n[1], n[2], n[3]])
     });
     Ok(SourceSpec::Vector {
@@ -713,8 +731,14 @@ fn parse_layer(json: &serde_json::Value) -> Result<Layer, Error> {
         id,
         source: str_of("source"),
         source_layer: str_of("source-layer"),
-        minzoom: obj.get("minzoom").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        maxzoom: obj.get("maxzoom").and_then(|v| v.as_f64()).unwrap_or(24.0),
+        minzoom: obj
+            .get("minzoom")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0),
+        maxzoom: obj
+            .get("maxzoom")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(24.0),
         filter,
         visible,
         kind,
@@ -792,7 +816,7 @@ mod tests {
         assert_eq!(line.cap.token(&ctx), "round");
         assert_eq!(line.join.token(&ctx), "miter");
         assert!(line.width.is_feature_constant());
-        assert!(line.dasharray.numbers(&ctx).is_empty());
+        assert_eq!(line.dasharray.numbers(&ctx), [] as [f64; 0]);
         assert_eq!(line.gap_width.number(&ctx), 0.0);
         let feature = Feature {
             id: None,
@@ -810,12 +834,12 @@ mod tests {
     #[test]
     fn localizing_prefers_the_language_and_keeps_the_fallback() {
         let mut json: serde_json::Value = serde_json::from_str(
-            r##"{"version": 8, "sources": {}, "layers": [
+            r#"{"version": 8, "sources": {}, "layers": [
               {"id": "a", "type": "symbol", "layout": {"text-field": ["get", "name"]}},
               {"id": "b", "type": "symbol", "layout": {"text-field": "{name} {ref}"}},
               {"id": "c", "type": "symbol", "layout": {"text-field": "Fixed"}},
               {"id": "d", "type": "line"}
-            ]}"##,
+            ]}"#,
         )
         .unwrap();
         localize(&mut json, "fr");

@@ -435,11 +435,9 @@ mod tests {
     #[test]
     fn far_tiles_are_empty_and_nearby_ones_keep_what_touches_them() {
         // Zoom 14 at the antipode: nothing.
-        assert!(
-            crate::mvt::decode(&tile(14, 0, 0))
-                .unwrap()
-                .layers
-                .is_empty()
+        assert_eq!(
+            crate::mvt::decode(&tile(14, 0, 0)).unwrap().layers,
+            [] as [mvt::Layer; 0]
         );
         // The tile over Port Meridian at zoom 10 has the town and the roads through it.
         let (px, py) = project(-0.20, 0.00);

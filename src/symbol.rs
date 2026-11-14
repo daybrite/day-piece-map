@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(anchors[0].point, Point::new(125.0, 0.0));
         assert_eq!(anchors[0].angle, 0.0);
         let short = [Point::new(0.0, 0.0), Point::new(50.0, 0.0)];
-        assert!(line_anchors(&short, 250.0, 100.0, 0.5).is_empty());
+        assert_eq!(line_anchors(&short, 250.0, 100.0, 0.5), [] as [Anchor; 0]);
         // A right angle at the middle: the center anchor is refused, the straight parts are fine.
         let corner = [
             Point::new(0.0, 0.0),
@@ -312,7 +312,7 @@ mod tests {
                 .iter()
                 .all(|a| (a.point.x - 300.0).abs() > 25.0 || (a.point.y).abs() > 25.0)
         );
-        assert!(!along.is_empty());
+        assert_ne!(along, [] as [Anchor; 0]);
     }
 
     #[test]

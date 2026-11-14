@@ -135,7 +135,7 @@ fn the_recorded_liberty_style_draws_london_offline() {
         "{requests:#?}"
     );
     assert!(
-        f.unanswered.lock().map(|l| l.is_empty()).unwrap_or(false),
+        f.unanswered.lock().is_ok_and(|l| l.is_empty()),
         "requests the recording does not hold: {:?}",
         f.unanswered.lock().map(|l| l.clone())
     );

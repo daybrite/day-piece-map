@@ -60,7 +60,7 @@ impl TileId {
         rows.wrapping_sub(1).wrapping_sub(self.y)
     }
     /// The tile's PMTiles id: its position on the Hilbert curve of its zoom level, after
-    /// every tile of the levels above (the spec's TileID).
+    /// every tile of the levels above (the spec's `TileID`).
     pub fn pmtiles_id(self) -> u64 {
         let z = u32::from(self.z.min(31));
         let before = ((1u64 << (2 * z)) - 1) / 3;
@@ -142,15 +142,12 @@ pub fn open(
                     .as_deref()
                     .filter(|_| tiles.is_empty())
                     .and_then(pmtiles_url);
-                match archive {
-                    Some(archive) => {
-                        let source = PmtilesSource::open(client, archive).await?;
-                        Ok(Rc::new(source) as Rc<dyn TileSource>)
-                    }
-                    None => {
-                        let source = TemplateSource::open(client, &spec).await?;
-                        Ok(Rc::new(source) as Rc<dyn TileSource>)
-                    }
+                if let Some(archive) = archive {
+                    let source = PmtilesSource::open(client, archive).await?;
+                    Ok(Rc::new(source) as Rc<dyn TileSource>)
+                } else {
+                    let source = TemplateSource::open(client, &spec).await?;
+                    Ok(Rc::new(source) as Rc<dyn TileSource>)
                 }
             }
             SourceSpec::Unsupported(kind) => Err(Error::Unsupported(format!("{kind} sources"))),
@@ -168,6 +165,10 @@ fn pmtiles_url(url: &str) -> Option<String> {
     path.ends_with(".pmtiles").then(|| url.to_string())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "passed to `map_err`, which hands the error over by value"
+)]
 fn http_error(e: day_part_http::HttpError) -> Error {
     Error::Http(e.to_string())
 }
@@ -194,6 +195,11 @@ pub fn is_gzip(bytes: &[u8]) -> bool {
 
 /// Inflate a gzip member (RFC 1952): skip the header and its optional fields, inflate the
 /// raw deflate stream, drop the trailer. `miniz_oxide` has no gzip wrapper of its own.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the bytes are not a well-formed gzip member or the deflate
+/// stream does not inflate.
 pub fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     let bad = |what: &str| Error::Invalid(format!("gzip: {what}"));
     if !is_gzip(bytes) || bytes.len() < 18 {
@@ -236,6 +242,10 @@ pub fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, Error> {
 
 /// Inflate `bytes` if they are gzip, else return them as they are: a server that sends gzip
 /// without `Content-Encoding`, or an archive whose compression is `Unknown`.
+///
+/// # Errors
+///
+/// Returns the error [`gunzip`] returns when the bytes are gzip and malformed.
 pub fn gunzip_if_gzip(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     if is_gzip(&bytes) {
         gunzip(&bytes)
@@ -273,6 +283,10 @@ pub struct TileJson {
 
 impl TileJson {
     /// Read a TileJSON 3.0 document; `tiles` is required, the rest optional.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text is not a valid TileJSON document or has no `tiles`.
     pub fn parse(text: &str) -> Result<TileJson, Error> {
         let bad = |what: &str| Error::Invalid(format!("TileJSON: {what}"));
         let json: serde_json::Value =
@@ -295,14 +309,14 @@ impl TileJson {
         let zoom = |key: &str| -> Option<u8> {
             object
                 .get(key)
-                .and_then(|z| z.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .map(|z| z.clamp(0.0, 30.0) as u8)
         };
         let bounds = object
             .get("bounds")
             .and_then(|b| b.as_array())
             .and_then(|b| {
-                let n: Vec<f64> = b.iter().filter_map(|v| v.as_f64()).collect();
+                let n: Vec<f64> = b.iter().filter_map(serde_json::Value::as_f64).collect();
                 (n.len() == 4).then(|| [n[0], n[1], n[2], n[3]])
             });
         let string = |key: &str| object.get(key).and_then(|s| s.as_str()).map(str::to_string);
@@ -320,7 +334,7 @@ impl TileJson {
     /// options)`: the style's inline values override the document's).
     fn overridden_by(mut self, over: &TileJson) -> TileJson {
         if !over.tiles.is_empty() {
-            self.tiles = over.tiles.clone();
+            self.tiles.clone_from(&over.tiles);
         }
         self.minzoom = over.minzoom.or(self.minzoom);
         self.maxzoom = over.maxzoom.or(self.maxzoom);
@@ -333,6 +347,10 @@ impl TileJson {
 
 impl TemplateSource {
     /// A source from the resolved fields; `tiles` must be non-empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] when `json.tiles` is empty.
     pub fn new(client: Client, json: TileJson) -> Result<TemplateSource, Error> {
         if json.tiles.is_empty() {
             return Err(Error::Invalid("vector source: no tile templates".into()));
@@ -390,6 +408,11 @@ impl TemplateSource {
     }
 
     /// The TileJSON document at `url`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails, the server answers with an error status, or the
+    /// body is not a valid TileJSON document.
     pub async fn fetch_tilejson(client: &Client, url: &str) -> Result<TileJson, Error> {
         let response = get(client, Request::get(url)).await?;
         if response.status != 200 {
@@ -406,7 +429,7 @@ impl TemplateSource {
     pub fn url_for(&self, id: TileId) -> String {
         let n = self.templates.len() as u64;
         let which = ((u64::from(id.x) + u64::from(id.y)) % n.max(1)) as usize;
-        let template = self.templates.get(which).map(String::as_str).unwrap_or("");
+        let template = self.templates.get(which).map_or("", String::as_str);
         let y = if self.tms { id.flipped_y() } else { id.y };
         template
             .replace("{z}", &id.z.to_string())
@@ -472,6 +495,11 @@ impl Compression {
     }
 
     /// Undo this compression. `Unknown` sniffs for gzip; brotli and zstd are not implemented.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when gzip bytes are malformed, and [`Error::Unsupported`] for brotli and
+    /// zstd.
     pub fn decompress(self, bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
         match self {
             Compression::None => Ok(bytes),
@@ -518,6 +546,10 @@ const PREFIX_LEN: u64 = 16384;
 
 impl Header {
     /// Read the header from the archive's first bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bytes are not a valid PMTiles header.
     pub fn parse(bytes: &[u8]) -> Result<Header, Error> {
         let bad = |what: &str| Error::Invalid(format!("PMTiles: {what}"));
         if bytes.len() < HEADER_LEN {
@@ -588,6 +620,10 @@ impl Directory {
     /// Decode a directory's (already decompressed) bytes: the entry count, then the tile ids
     /// as deltas, the run lengths, the lengths, and the offsets with `0` meaning "right after
     /// the previous entry".
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bytes are not a valid PMTiles directory.
     pub fn parse(bytes: &[u8]) -> Result<Directory, Error> {
         let bad = |what: &str| Error::Invalid(format!("PMTiles directory: {what}"));
         let mut pos = 0usize;
@@ -623,10 +659,10 @@ impl Directory {
                 run_length: 0,
             });
         }
-        for e in entries.iter_mut() {
+        for e in &mut entries {
             e.run_length = u32::try_from(varint()?).map_err(|_| bad("run length too large"))?;
         }
-        for e in entries.iter_mut() {
+        for e in &mut entries {
             e.length = u32::try_from(varint()?).map_err(|_| bad("length too large"))?;
             if e.length == 0 {
                 return Err(bad("entry length 0"));
@@ -908,7 +944,7 @@ mod tests {
     fn vector(url: Option<&str>, tiles: &[&str]) -> SourceSpec {
         SourceSpec::Vector {
             url: url.map(str::to_string),
-            tiles: tiles.iter().map(|t| t.to_string()).collect(),
+            tiles: tiles.iter().map(std::string::ToString::to_string).collect(),
             minzoom: None,
             maxzoom: None,
             bounds: None,
@@ -981,7 +1017,7 @@ mod tests {
         assert_eq!(TileId::new(1, 1, 1).pmtiles_id(), 3);
         assert_eq!(TileId::new(1, 1, 0).pmtiles_id(), 4);
         assert_eq!(TileId::new(2, 0, 0).pmtiles_id(), 5);
-        assert_eq!(TileId::new(12, 3423, 1763).pmtiles_id(), 19078479);
+        assert_eq!(TileId::new(12, 3423, 1763).pmtiles_id(), 19_078_479);
         // Every tile of a level has a distinct id in the level's range.
         let mut ids: Vec<u64> = (0..16)
             .flat_map(|x| (0..16).map(move |y| TileId::new(4, x, y).pmtiles_id()))
