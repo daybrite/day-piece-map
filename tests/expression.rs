@@ -169,8 +169,7 @@ fn property_spec(spec: Option<&Json>) -> Option<(PropertySpec, FunctionHints)> {
         Some("enum") => Type::Enum(
             spec.get("values")
                 .and_then(Json::as_object)
-                .map(|m| m.keys().cloned().collect())
-                .unwrap_or_default(),
+                .map_or_default(|m| m.keys().cloned().collect()),
         ),
         Some("array") => {
             let item = match spec.get("value").and_then(Json::as_str) {
@@ -237,13 +236,11 @@ fn geometry_kind(geometry: Option<&Json>) -> GeometryType {
 }
 
 fn value_map(json: Option<&Json>) -> BTreeMap<String, Value> {
-    json.and_then(Json::as_object)
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| (k.clone(), Value::from_json(v)))
-                .collect()
-        })
-        .unwrap_or_default()
+    json.and_then(Json::as_object).map_or_default(|m| {
+        m.iter()
+            .map(|(k, v)| (k.clone(), Value::from_json(v)))
+            .collect()
+    })
 }
 
 fn json_number(n: f64) -> Json {
@@ -429,13 +426,12 @@ fn run_fixture(fixture: &Json) -> Option<String> {
         let available_images: Vec<String> = globals
             .get("availableImages")
             .and_then(Json::as_array)
-            .map(|a| {
+            .map_or_default(|a| {
                 a.iter()
                     .filter_map(Json::as_str)
                     .map(String::from)
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         let feature = Feature {
             id: feature_json.get("id").map(Value::from_json),
             kind: geometry_kind(feature_json.get("geometry")),
@@ -503,8 +499,7 @@ fn maplibre_expression_fixtures() {
         let name = path
             .parent()
             .and_then(|p| p.strip_prefix(&root).ok())
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
+            .map_or_default(|p| p.to_string_lossy().replace('\\', "/"));
         let top = name.split('/').next().unwrap_or("").to_string();
         let tally = by_dir.entry(top).or_default();
         if let Some(reason) = skip_reason(&name) {

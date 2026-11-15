@@ -4734,6 +4734,7 @@ mod tests {
     use super::*;
     use crate::GeometryType;
     use serde_json::json;
+    use std::assert_matches;
 
     fn rgba(c: Option<Color>) -> Option<[f64; 4]> {
         c.map(|c| [c.r, c.g, c.b, c.a])
@@ -4894,14 +4895,11 @@ mod tests {
         Feature {
             id: None,
             kind: GeometryType::Unknown,
-            properties: properties
-                .as_object()
-                .map(|m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), Value::from_json(v)))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            properties: properties.as_object().map_or_default(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), Value::from_json(v)))
+                    .collect()
+            }),
             geometry: Vec::new(),
         }
     }
@@ -5018,16 +5016,14 @@ mod tests {
             ["string", ["get", "y"]]
         ]))
         .err()
-        .map(|e| e.to_string())
-        .unwrap_or_default();
+        .map_or_default(|e| e.to_string());
         assert!(
             err.contains("Cannot compare types 'number' and 'string'."),
             "{err}"
         );
         let err = Expression::parse_filter(&json!(["number", ["get", "x"]]))
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+            .map_or_default(|e| e.to_string());
         assert!(
             err.contains("Expected boolean but found number instead."),
             "{err}"
@@ -5511,9 +5507,9 @@ mod tests {
         let e = Expression::parse(&json!(["zoom"]), None).unwrap_or_else(|e| panic!("{e}"));
         assert!(e.is_feature_constant());
         assert!(!e.is_zoom_constant());
-        assert!(matches!(
+        assert_matches!(
             Expression::parse(&json!(["within", {}]), None),
             Err(Error::Unsupported(_))
-        ));
+        );
     }
 }

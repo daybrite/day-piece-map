@@ -911,6 +911,7 @@ async fn read_range(
 mod tests {
     use super::*;
     use day_part_http::simulation::{Reply, Simulation};
+    use std::assert_matches;
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
 
@@ -996,15 +997,12 @@ mod tests {
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
         // Truncated and corrupt members.
         let whole = gzip(&data);
-        assert!(matches!(gunzip(&whole[..5]), Err(Error::Invalid(_))));
-        assert!(matches!(
-            gunzip(&whole[..whole.len() / 2]),
-            Err(Error::Invalid(_))
-        ));
-        assert!(matches!(gunzip(b"plain"), Err(Error::Invalid(_))));
+        assert_matches!(gunzip(&whole[..5]), Err(Error::Invalid(_)));
+        assert_matches!(gunzip(&whole[..whole.len() / 2]), Err(Error::Invalid(_)));
+        assert_matches!(gunzip(b"plain"), Err(Error::Invalid(_)));
         let mut unterminated = vec![0x1f, 0x8b, 8, 0x08, 0, 0, 0, 0, 0, 0xff];
         unterminated.extend_from_slice(b"no terminator at all....");
-        assert!(matches!(gunzip(&unterminated), Err(Error::Invalid(_))));
+        assert_matches!(gunzip(&unterminated), Err(Error::Invalid(_)));
     }
 
     // -- Tile ids ----------------------------------------------------------------------------
@@ -1161,10 +1159,10 @@ mod tests {
                 status: 500
             })
         );
-        assert!(matches!(
+        assert_matches!(
             block_on(source.fetch(TileId::new(1, 1, 1))),
             Err(Error::Http(_))
-        ));
+        );
     }
 
     #[test]
@@ -1529,16 +1527,13 @@ mod tests {
         );
         assert_eq!(dir.find(21), Some(entries[3]));
         assert_eq!(dir.find(22), None);
-        assert!(matches!(Directory::parse(&[]), Err(Error::Invalid(_))));
-        assert!(matches!(
-            Directory::parse(&[200, 1]),
-            Err(Error::Invalid(_))
-        ));
+        assert_matches!(Directory::parse(&[]), Err(Error::Invalid(_)));
+        assert_matches!(Directory::parse(&[200, 1]), Err(Error::Invalid(_)));
         let truncated = encode_directory(&entries);
-        assert!(matches!(
+        assert_matches!(
             Directory::parse(&truncated[..truncated.len() - 2]),
             Err(Error::Invalid(_))
-        ));
+        );
         assert_eq!(Directory::default().find(0), None);
     }
 
@@ -1558,10 +1553,10 @@ mod tests {
             (h.addressed_tiles, h.tile_entries, h.tile_contents),
             (5, 3, 2)
         );
-        assert!(matches!(Header::parse(&[0; 100]), Err(Error::Invalid(_))));
+        assert_matches!(Header::parse(&[0; 100]), Err(Error::Invalid(_)));
         let mut v2 = archive().bytes;
         v2[7] = 2;
-        assert!(matches!(Header::parse(&v2), Err(Error::Unsupported(_))));
+        assert_matches!(Header::parse(&v2), Err(Error::Unsupported(_)));
     }
 
     #[test]

@@ -1156,7 +1156,7 @@ fn point_anchors(parts: &[Vec<Point>], kind: GeometryType) -> Vec<Point> {
                     ));
                 }
             }
-            best.map(|(_, p)| vec![p]).unwrap_or_default()
+            best.map_or_default(|(_, p)| vec![p])
         }
         _ => parts
             .iter()

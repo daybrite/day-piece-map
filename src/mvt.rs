@@ -568,6 +568,7 @@ fn encode_layer(layer: &Layer) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     // -- A small protobuf encoder, enough to build tiles the decoder has to read. ----------
 
@@ -952,7 +953,7 @@ mod tests {
             geometry: vec![command(MOVE_TO, 1), 0, 0],
         };
         let bytes = tile(&[layer("n", &["k"], &[Val::Bool(true)], &[f])]);
-        assert!(matches!(decode(&bytes), Err(Error::Invalid(_))));
+        assert_matches!(decode(&bytes), Err(Error::Invalid(_)));
         let f = Feat {
             id: None,
             kind: 1,
@@ -960,7 +961,7 @@ mod tests {
             geometry: vec![command(MOVE_TO, 1), 0, 0],
         };
         let bytes = tile(&[layer("n", &["k"], &[Val::Bool(true)], &[f])]);
-        assert!(matches!(decode(&bytes), Err(Error::Invalid(_))));
+        assert_matches!(decode(&bytes), Err(Error::Invalid(_)));
         let f = Feat {
             id: None,
             kind: 1,
@@ -968,7 +969,7 @@ mod tests {
             geometry: vec![command(MOVE_TO, 1), 0, 0],
         };
         let bytes = tile(&[layer("n", &["k"], &[Val::Bool(true)], &[f])]);
-        assert!(matches!(decode(&bytes), Err(Error::Invalid(_))));
+        assert_matches!(decode(&bytes), Err(Error::Invalid(_)));
     }
 
     #[test]
@@ -989,7 +990,7 @@ mod tests {
                 geometry: g.clone(),
             };
             let bytes = tile(&[layer("n", &[], &[], &[f])]);
-            assert!(matches!(decode(&bytes), Err(Error::Invalid(_))), "{g:?}");
+            assert_matches!(decode(&bytes), Err(Error::Invalid(_)), "{g:?}");
         }
     }
 
@@ -1015,16 +1016,16 @@ mod tests {
         varint(&mut bad, (3 << 3) | 2);
         varint(&mut bad, 1000);
         bad.extend_from_slice(&[0u8; 4]);
-        assert!(matches!(decode(&bad), Err(Error::Invalid(_))));
+        assert_matches!(decode(&bad), Err(Error::Invalid(_)));
         // A length that overflows usize.
         let mut bad = Vec::new();
         varint(&mut bad, (3 << 3) | 2);
         varint(&mut bad, u64::MAX);
-        assert!(matches!(decode(&bad), Err(Error::Invalid(_))));
+        assert_matches!(decode(&bad), Err(Error::Invalid(_)));
         // A varint that never ends.
-        assert!(matches!(decode(&[0xff; 12]), Err(Error::Invalid(_))));
+        assert_matches!(decode(&[0xff; 12]), Err(Error::Invalid(_)));
         // Deprecated group wire types.
-        assert!(matches!(decode(&[(3 << 3) | 3]), Err(Error::Invalid(_))));
+        assert_matches!(decode(&[(3 << 3) | 3]), Err(Error::Invalid(_)));
         // Random-ish bytes.
         let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
         for _ in 0..200 {

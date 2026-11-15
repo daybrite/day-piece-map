@@ -123,11 +123,7 @@ impl Property {
     pub fn token(&self, ctx: &Context<'_>) -> String {
         match self.value(ctx) {
             Value::String(s) => s,
-            _ => self
-                .default
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_default(),
+            _ => self.default.as_str().map_or_default(str::to_string),
         }
     }
 
@@ -583,13 +579,12 @@ fn parse_source(id: &str, json: &serde_json::Value) -> Result<SourceSpec, Error>
     let tiles = obj
         .get("tiles")
         .and_then(|v| v.as_array())
-        .map(|items| {
+        .map_or_default(|items| {
             items
                 .iter()
                 .filter_map(|t| t.as_str().map(str::to_string))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     let bounds = obj.get("bounds").and_then(|v| v.as_array()).and_then(|b| {
         let n: Vec<f64> = b.iter().filter_map(serde_json::Value::as_f64).collect();
         (n.len() == 4).then(|| [n[0], n[1], n[2], n[3]])
@@ -749,6 +744,7 @@ fn parse_layer(json: &serde_json::Value) -> Result<Layer, Error> {
 mod tests {
     use super::*;
     use crate::Feature;
+    use std::assert_matches;
 
     const STYLE: &str = r##"{
       "version": 8,
@@ -777,18 +773,17 @@ mod tests {
         assert_eq!(style.name.as_deref(), Some("Fixture"));
         assert_eq!(style.sprite.as_deref(), Some("https://example.test/sprite"));
         assert_eq!(style.sources.len(), 2);
-        assert!(matches!(style.sources["osm"], SourceSpec::Vector { .. }));
+        assert_matches!(style.sources["osm"], SourceSpec::Vector { .. });
         assert_eq!(
             style.sources["shade"],
             SourceSpec::Unsupported("raster".into())
         );
         assert_eq!(style.layers.len(), 4);
-        assert!(matches!(style.layers[0].kind, LayerKind::Background(_)));
+        assert_matches!(style.layers[0].kind, LayerKind::Background(_));
         assert!(!style.layers[2].visible);
-        assert!(matches!(
+        assert_matches!(
             style.layers[3].kind,
-            LayerKind::Unsupported(ref k) if k == "hillshade"
-        ));
+            LayerKind::Unsupported(ref k) if k == "hillshade");
         let water = style.layer("water").unwrap();
         assert_eq!(water.source_layer.as_deref(), Some("water"));
         assert!(water.filter.is_some());
@@ -872,17 +867,14 @@ mod tests {
 
     #[test]
     fn bad_documents_are_rejected_with_a_reason() {
-        assert!(matches!(
+        assert_matches!(
             Style::parse_str("[]"),
-            Err(Error::Invalid(ref m)) if m.contains("object")
-        ));
-        assert!(matches!(
+            Err(Error::Invalid(ref m)) if m.contains("object"));
+        assert_matches!(
             Style::parse_str(r#"{"version": 7}"#),
-            Err(Error::Invalid(ref m)) if m.contains("version")
-        ));
-        assert!(matches!(
+            Err(Error::Invalid(ref m)) if m.contains("version"));
+        assert_matches!(
             Style::parse_str(r#"{"version": 8, "layers": [{"type": "fill"}]}"#),
-            Err(Error::Invalid(ref m)) if m.contains("id")
-        ));
+            Err(Error::Invalid(ref m)) if m.contains("id"));
     }
 }
