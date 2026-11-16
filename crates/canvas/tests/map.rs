@@ -9,11 +9,10 @@ use day_geometry::Point;
 use day_mock::{MockProbe, MockToolkit};
 use day_part_http::Client;
 use day_part_http::simulation::{ManualClock, Reply, Simulation};
-use day_piece_map::mvt::{self, Layer, Tile};
-use day_piece_map::{
-    Feature, GeometryType, LngLat, MapStatus, MapView, Marker, Value, map_with_client,
+use day_piece_map_canvas::mvt::{self, Layer, Tile};
+use day_piece_map_canvas::{
+    CanvasMapView, Feature, GeometryType, LngLat, MapStatus, Marker, Value, map_with_client,
 };
-use day_pieces::prelude::*;
 use day_reactive::flush_sync;
 use day_spec::{DragPhase, DrawOp, Event, NodeId, WindowOptions};
 use std::cell::RefCell;
@@ -98,31 +97,36 @@ struct Fixture {
     probe: MockProbe,
     clock: ManualClock,
     sim: Simulation,
-    view: MapView,
+    view: CanvasMapView,
     /// Frame requests the piece made; the mock toolkit delivers none, so the test does.
     frames: Rc<RefCell<Vec<day_spec::FrameCallback>>>,
 }
 
 fn boot() -> Fixture {
+    boot_style(STYLE, 512.0)
+}
+
+fn boot_style(style: &str, width: f64) -> Fixture {
     day_core::uninstall_tree();
     let clock = ManualClock::default();
     let sim = Simulation::with_clock(Arc::new(clock.clone()));
-    sim.route("GET", "http://style.test/style.json", |_| {
-        Ok(Reply::new(200, STYLE.as_bytes().to_vec()))
+    let style = style.to_owned();
+    sim.route("GET", "http://style.test/style.json", move |_| {
+        Ok(Reply::new(200, style.as_bytes().to_vec()))
     });
     sim.handle(
         |_, url| url.starts_with("http://tiles.test/"),
         |_| Ok(Reply::new(200, tile_bytes())),
     );
     let client = Client::builder().transport(sim.clone()).build();
-    let view = MapView::new(LngLat::new(0.0, 0.0), 2.0);
+    let view = CanvasMapView::new(LngLat::new(0.0, 0.0), 2.0);
     let frames: Rc<RefCell<Vec<day_spec::FrameCallback>>> = Rc::new(RefCell::new(Vec::new()));
     let (mock, probe) = MockToolkit::new();
     day_core::launch_with(
         mock,
         WindowOptions::default()
             .title("Map fixture")
-            .size(512.0, 512.0),
+            .size(width, 512.0),
         move || map_with_client("http://style.test/style.json", view, client).any(),
     );
     // After launch, which installs the toolkit's own requester: the mock delivers no frames,
@@ -177,8 +181,8 @@ impl Fixture {
 fn a_style_and_its_tiles_load_through_intercepted_http_and_draw() {
     let f = boot();
     f.settle();
-    assert_eq!(f.view.status.get_untracked(), MapStatus::Ready);
-    assert_eq!(f.view.attribution.get_untracked(), "Test data");
+    assert_eq!(f.view.common.status.get_untracked(), MapStatus::Ready);
+    assert_eq!(f.view.common.attribution.get_untracked(), "Test data");
     // Zoom 2 in a 512-point window: the viewport is one tile wide, so a handful of tiles were
     // asked for, each exactly once.
     let tile_requests = f
@@ -213,7 +217,7 @@ fn gestures_move_the_view() {
     let f = boot();
     f.settle();
     let (node, _) = f.canvas();
-    let start = f.view.center.get_untracked();
+    let start = f.view.common.center.get_untracked();
     // A drag of 100 points east moves the content east, so the center moves west.
     f.probe.emit(
         NodeId(node),
@@ -240,13 +244,13 @@ fn gestures_move_the_view() {
         },
     );
     f.tick();
-    let after_drag = f.view.center.get_untracked();
+    let after_drag = f.view.common.center.get_untracked();
     assert!(after_drag.lng < start.lng, "{start:?} -> {after_drag:?}");
     assert!((after_drag.lat - start.lat).abs() < 1e-9);
     // A pinch to twice the scale is one zoom level, about its location: the point under the
     // fingers stays put.
     let anchor = Point::new(128.0, 128.0);
-    let before = f.view.zoom.get_untracked();
+    let before = f.view.common.zoom.get_untracked();
     for (phase, scale) in [
         (DragPhase::Began, 1.0),
         (DragPhase::Changed, 1.5),
@@ -263,9 +267,9 @@ fn gestures_move_the_view() {
         );
     }
     f.tick();
-    assert!((f.view.zoom.get_untracked() - (before + 1.0)).abs() < 1e-9);
+    assert!((f.view.common.zoom.get_untracked() - (before + 1.0)).abs() < 1e-9);
     // A wheel pan arrives as a lone Changed and moves the content too.
-    let before_pan = f.view.center.get_untracked();
+    let before_pan = f.view.common.center.get_untracked();
     f.probe.emit(
         NodeId(node),
         Event::Pan {
@@ -275,13 +279,13 @@ fn gestures_move_the_view() {
         },
     );
     f.tick();
-    let after_pan = f.view.center.get_untracked();
+    let after_pan = f.view.common.center.get_untracked();
     assert!(
         after_pan.lat < before_pan.lat,
         "content up, center south: {before_pan:?} -> {after_pan:?}"
     );
     f.settle();
-    assert_eq!(f.view.status.get_untracked(), MapStatus::Ready);
+    assert_eq!(f.view.common.status.get_untracked(), MapStatus::Ready);
     drop(f);
     day_core::uninstall_tree();
 }
@@ -317,7 +321,7 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
     drag(DragPhase::Ended, 120.0);
     t += 0.016;
     f.tick_at(t);
-    let at_release = f.view.center.get_untracked();
+    let at_release = f.view.common.center.get_untracked();
     // The glide: frames after the release keep moving the center the same way, slower each
     // time, and it stops on its own.
     let mut last = at_release.lng;
@@ -326,7 +330,7 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
     for _ in 0..400 {
         t += 0.016;
         f.tick_at(t);
-        let lng = f.view.center.get_untracked().lng;
+        let lng = f.view.common.center.get_untracked().lng;
         if lng == last {
             break;
         }
@@ -353,21 +357,21 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
     drag(DragPhase::Ended, 80.0);
     t += 0.016;
     f.tick_at(t);
-    let gliding = f.view.center.get_untracked().lng;
+    let gliding = f.view.common.center.get_untracked().lng;
     t += 0.016;
     f.tick_at(t);
     assert!(
-        f.view.center.get_untracked().lng < gliding,
+        f.view.common.center.get_untracked().lng < gliding,
         "a second swipe glides too"
     );
     drag(DragPhase::Began, 0.0);
     t += 0.016;
     f.tick_at(t);
-    let held = f.view.center.get_untracked().lng;
+    let held = f.view.common.center.get_untracked().lng;
     t += 0.5;
     f.tick_at(t);
     assert_eq!(
-        f.view.center.get_untracked().lng,
+        f.view.common.center.get_untracked().lng,
         held,
         "a finger down holds the map still"
     );
@@ -380,11 +384,11 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
     drag(DragPhase::Ended, 40.0);
     t += 0.016;
     f.tick_at(t);
-    let rested = f.view.center.get_untracked().lng;
+    let rested = f.view.common.center.get_untracked().lng;
     t += 0.016;
     f.tick_at(t);
     assert_eq!(
-        f.view.center.get_untracked().lng,
+        f.view.common.center.get_untracked().lng,
         rested,
         "no glide after a rest"
     );
@@ -412,29 +416,29 @@ fn flights_fits_and_turns_arrive_where_asked() {
     f.settle();
     // A flight: the view moves along the way and lands exactly on the target.
     let target = LngLat::new(1.5, -0.8);
-    f.view.fly_to(target, 5.0);
+    f.view.common.fly_to(target, 5.0);
     flush_sync();
     let mut t = run_frames(&f, 1.0, 0.4);
-    let midway = f.view.center.get_untracked();
+    let midway = f.view.common.center.get_untracked();
     assert!(
         midway != LngLat::new(0.0, 0.0) && midway != target,
         "{midway:?}"
     );
     t = run_frames(&f, t, 1.0);
-    let landed = f.view.center.get_untracked();
+    let landed = f.view.common.center.get_untracked();
     assert!(
         (landed.lng - target.lng).abs() < 1e-9 && (landed.lat - target.lat).abs() < 1e-9,
         "{landed:?}"
     );
-    assert!((f.view.zoom.get_untracked() - 5.0).abs() < 1e-9);
+    assert!((f.view.common.zoom.get_untracked() - 5.0).abs() < 1e-9);
     // Fitting a box: both corners end up inside the viewport.
     let (sw, ne) = (LngLat::new(-3.0, -2.0), LngLat::new(3.0, 2.0));
-    f.view.fit_bounds(sw, ne, 20.0);
+    f.view.common.fit_bounds(sw, ne, 20.0);
     flush_sync();
     t = run_frames(&f, t, 1.2);
-    let cam = day_piece_map::Camera::new(
-        f.view.center.get_untracked(),
-        f.view.zoom.get_untracked(),
+    let cam = day_piece_map_canvas::Camera::new(
+        f.view.common.center.get_untracked(),
+        f.view.common.zoom.get_untracked(),
         day_geometry::Size::new(512.0, 512.0),
     );
     for corner in [sw, ne] {
@@ -445,17 +449,17 @@ fn flights_fits_and_turns_arrive_where_asked() {
         );
     }
     // A turn: the bearing animates to what was asked and north resets it.
-    f.view.rotate_to(90.0);
+    f.view.common.rotate_to(90.0);
     flush_sync();
     t = run_frames(&f, t, 0.2);
-    let partway = f.view.bearing.get_untracked();
+    let partway = f.view.common.bearing.get_untracked();
     assert!(partway > 0.0 && partway < 90.0, "{partway}");
     t = run_frames(&f, t, 0.6);
-    assert!((f.view.bearing.get_untracked() - 90.0).abs() < 1e-9);
-    f.view.reset_north();
+    assert!((f.view.common.bearing.get_untracked() - 90.0).abs() < 1e-9);
+    f.view.common.reset_north();
     flush_sync();
     run_frames(&f, t, 0.8);
-    assert_eq!(f.view.bearing.get_untracked(), 0.0);
+    assert_eq!(f.view.common.bearing.get_untracked(), 0.0);
     f.settle();
     drop(f);
     day_core::uninstall_tree();
@@ -470,47 +474,70 @@ fn taps_report_markers_and_features_and_a_double_tap_zooms() {
     // A marker at the center: a tap on its head reports it.
     let id = f
         .view
+        .common
         .add_marker(Marker::new(LngLat::new(0.0, 0.0)).title("Here"));
     flush_sync();
     tap(Point::new(256.0, 256.0 - 18.0));
     let mut t = run_frames(&f, 1.0, 0.5);
-    let hit = f.view.tap.get_untracked().expect("a tap was reported");
+    let hit = f
+        .view
+        .common
+        .tap
+        .get_untracked()
+        .expect("a tap was reported");
     assert_eq!(hit.marker, Some(id));
-    assert_eq!(hit.features, [] as [day_piece_map::FeatureHit; 0]);
+    assert_eq!(
+        f.view.feature_hits.get_untracked(),
+        [] as [day_piece_map_canvas::FeatureHit; 0]
+    );
     // Off the marker: the features drawn there. The test tile fills the whole world with the
     // "land" polygon, so something is always under a tap.
     tap(Point::new(100.0, 400.0));
     t = run_frames(&f, t, 0.5);
-    let hit = f.view.tap.get_untracked().expect("a tap was reported");
+    let hit = f
+        .view
+        .common
+        .tap
+        .get_untracked()
+        .expect("a tap was reported");
     assert_eq!(hit.marker, None);
     assert!(
-        hit.features.iter().any(|h| h.layer == "land"),
+        f.view
+            .feature_hits
+            .get_untracked()
+            .iter()
+            .any(|h| h.layer == "land"),
         "{:?}",
-        hit.features.iter().map(|h| &h.layer).collect::<Vec<_>>()
+        f.view
+            .feature_hits
+            .get_untracked()
+            .iter()
+            .map(|h| &h.layer)
+            .collect::<Vec<_>>()
     );
     let location = hit.location;
     assert!(location.lng < 0.0 && location.lat < 0.0, "{location:?}");
     // Two quick taps zoom in a level about the spot, and are not reported.
-    f.view.tap.set(None);
-    let zoom = f.view.zoom.get_untracked();
+    f.view.common.tap.set(None);
+    let zoom = f.view.common.zoom.get_untracked();
     tap(Point::new(400.0, 300.0));
     t += 0.05;
     f.tick_at(t);
     tap(Point::new(402.0, 301.0));
     t = run_frames(&f, t, 0.6);
     assert!(
-        (f.view.zoom.get_untracked() - (zoom + 1.0)).abs() < 1e-9,
+        (f.view.common.zoom.get_untracked() - (zoom + 1.0)).abs() < 1e-9,
         "{}",
-        f.view.zoom.get_untracked()
+        f.view.common.zoom.get_untracked()
     );
     assert!(
-        f.view.tap.get_untracked().is_none(),
+        f.view.common.tap.get_untracked().is_none(),
         "a double tap is not a tap"
     );
     // The spot under the fingers stayed put.
-    let cam = day_piece_map::Camera::new(
-        f.view.center.get_untracked(),
-        f.view.zoom.get_untracked(),
+    let cam = day_piece_map_canvas::Camera::new(
+        f.view.common.center.get_untracked(),
+        f.view.common.zoom.get_untracked(),
         day_geometry::Size::new(512.0, 512.0),
     );
     let there = cam.project(location);
@@ -536,7 +563,7 @@ fn a_twist_turns_the_map_and_a_small_one_settles_north() {
             },
         );
     };
-    let under = f.view.center.get_untracked();
+    let under = f.view.common.center.get_untracked();
     // A quarter turn clockwise: the bearing follows (less the dead zone), the center holds.
     twist(DragPhase::Began, 0.0);
     twist(DragPhase::Changed, 0.4);
@@ -545,9 +572,9 @@ fn a_twist_turns_the_map_and_a_small_one_settles_north() {
     f.tick();
     twist(DragPhase::Ended, std::f64::consts::FRAC_PI_2);
     f.tick();
-    let bearing = f.view.bearing.get_untracked();
+    let bearing = f.view.common.bearing.get_untracked();
     assert!((85.0..=90.0).contains(&bearing), "{bearing}");
-    let center = f.view.center.get_untracked();
+    let center = f.view.common.center.get_untracked();
     assert!((center.lng - under.lng).abs() < 1e-6 && (center.lat - under.lat).abs() < 1e-6);
     // The frame draws the tiles through a turn and the labels upright: a Concat op appears.
     f.settle();
@@ -557,25 +584,172 @@ fn a_twist_turns_the_map_and_a_small_one_settles_north() {
         "the raster layer is turned"
     );
     // A twist that ends near north settles on north; one inside the dead zone changes nothing.
-    f.view.rotate_to(0.0);
+    f.view.common.rotate_to(0.0);
     flush_sync();
     run_frames(&f, 1.0, 0.8);
-    assert_eq!(f.view.bearing.get_untracked(), 0.0);
+    assert_eq!(f.view.common.bearing.get_untracked(), 0.0);
     twist(DragPhase::Began, 0.0);
     twist(DragPhase::Changed, 0.03);
     f.tick();
     twist(DragPhase::Ended, 0.03);
     f.tick();
-    assert_eq!(f.view.bearing.get_untracked(), 0.0, "inside the dead zone");
+    assert_eq!(
+        f.view.common.bearing.get_untracked(),
+        0.0,
+        "inside the dead zone"
+    );
     twist(DragPhase::Began, 0.0);
     twist(DragPhase::Changed, 0.12);
     f.tick();
     twist(DragPhase::Ended, 0.12);
     f.tick();
-    assert!(f.view.bearing.get_untracked() > 0.0);
+    assert!(f.view.common.bearing.get_untracked() > 0.0);
     run_frames(&f, 2.0, 0.8);
-    assert_eq!(f.view.bearing.get_untracked(), 0.0, "snapped back to north");
+    assert_eq!(
+        f.view.common.bearing.get_untracked(),
+        0.0,
+        "snapped back to north"
+    );
     f.settle();
+    drop(f);
+    day_core::uninstall_tree();
+}
+
+#[test]
+fn shared_gesture_switches_disable_motion_but_keep_programmatic_moves() {
+    let f = boot();
+    f.settle();
+    let (node, _) = f.canvas();
+    f.view.common.interaction.set(day_piece_map::Interaction {
+        pan: false,
+        zoom: false,
+        rotate: false,
+    });
+    let center = f.view.common.center.get_untracked();
+    let zoom = f.view.common.zoom.get_untracked();
+    f.probe.emit(
+        NodeId(node),
+        Event::Pan {
+            phase: DragPhase::Changed,
+            delta: Point::new(100.0, 100.0),
+            location: Point::new(256.0, 256.0),
+        },
+    );
+    for phase in [DragPhase::Began, DragPhase::Changed, DragPhase::Ended] {
+        f.probe.emit(
+            NodeId(node),
+            Event::Pinch {
+                phase,
+                scale: 2.0,
+                location: Point::new(256.0, 256.0),
+            },
+        );
+        f.probe.emit(
+            NodeId(node),
+            Event::Rotate {
+                phase,
+                rotation: 1.0,
+                location: Point::new(256.0, 256.0),
+            },
+        );
+    }
+    f.tick();
+    assert_eq!(f.view.common.center.get_untracked(), center);
+    assert!((f.view.common.zoom.get_untracked() - zoom).abs() < 1e-9);
+    assert!(f.view.common.bearing.get_untracked().abs() < 1e-9);
+    f.view.common.fly_to(LngLat::new(1.0, 2.0), 4.0);
+    flush_sync();
+    run_frames(&f, 1.0, 1.5);
+    assert!((f.view.common.center.get_untracked().lng - 1.0).abs() < 1e-9);
+    f.settle();
+    drop(f);
+    day_core::uninstall_tree();
+}
+
+#[test]
+fn shared_geometry_is_reactive_and_draws_in_list_order() {
+    use day_geometry::Color;
+    use day_piece_map::Overlay;
+    use day_spec::{Paint, Shape};
+    let f = boot();
+    f.settle();
+    let line = Color::rgb(0.1, 0.2, 0.3);
+    let fill = Color::rgb(0.4, 0.5, 0.6);
+    f.view.common.overlays.set(vec![
+        Overlay::Polyline {
+            points: vec![LngLat::new(-1.0, 0.0), LngLat::new(1.0, 0.0)],
+            color: line,
+            width: 3.0,
+        },
+        Overlay::Polygon {
+            points: vec![
+                LngLat::new(-1.0, -1.0),
+                LngLat::new(1.0, -1.0),
+                LngLat::new(0.0, 1.0),
+            ],
+            fill,
+            stroke: line,
+            width: 2.0,
+        },
+    ]);
+    flush_sync();
+    f.tick();
+    let (_, ops) = f.canvas();
+    let stroke = ops
+        .iter()
+        .position(
+            |op| matches!(op, DrawOp::Stroke(Shape::Path(..), c, _) if *c == Paint::Solid(line)),
+        )
+        .expect("shared line");
+    let polygon = ops
+        .iter()
+        .position(|op| matches!(op, DrawOp::Fill(Shape::Polygon(_), c) if *c == Paint::Solid(fill)))
+        .expect("shared polygon");
+    assert!(stroke < polygon, "list order is paint order");
+    f.view.common.overlays.set(Vec::new());
+    flush_sync();
+    f.tick();
+    let (_, ops) = f.canvas();
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, DrawOp::Fill(Shape::Polygon(_), c) if *c == Paint::Solid(fill)))
+    );
+    drop(f);
+    day_core::uninstall_tree();
+}
+
+#[test]
+fn attribution_is_linked_and_does_not_report_a_map_tap() {
+    // Synthetic provider attribution exercises wrapping alongside the real legal OSM notice.
+    let mut style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    style["sources"]["t"]["attribution"] = serde_json::json!(
+        "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors <a href='https://fixture.test/license'>Fixture provider credit</a>"
+    );
+    let f = boot_style(&style.to_string(), 240.0);
+    f.settle();
+    let (_, credit) = f
+        .probe
+        .find_by_kind("day.label")
+        .into_iter()
+        .find(|(_, widget)| widget.text == "© OpenStreetMap contributors")
+        .expect("visible OSM credit");
+    assert!(credit.frame.size.width <= 240.0, "credit fits a narrow map");
+    f.probe.emit(NodeId(credit.node), Event::Tap(Point::ZERO));
+    flush_sync();
+    assert!(
+        f.probe
+            .log()
+            .iter()
+            .any(|entry| entry == "open_url https://www.openstreetmap.org/copyright")
+    );
+    assert!(f.view.common.tap.get_untracked().is_none());
+    assert!(
+        f.view
+            .common
+            .attribution
+            .get_untracked()
+            .contains("Fixture provider credit")
+    );
     drop(f);
     day_core::uninstall_tree();
 }

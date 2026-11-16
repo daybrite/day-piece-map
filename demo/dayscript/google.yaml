@@ -1,0 +1,24 @@
+# Requires network access and a Maps SDK key authorized for this application's signing identity.
+name: google
+description: Load Google Maps, exercise its camera, switch providers, and remount Google Maps.
+flow:
+  - wait_for: { id: map_canvas }
+  - select: { id: map_provider, index: 1 }
+  - pause: { secs: 8.0 }
+  - assert_text: { id: map_status, text: "Ready" }
+  - screenshot: google-maps-london
+  - tap: { id: map_fly }
+  - pause: { secs: 2.0 }
+  - assert_visible: { id: map_position }
+  - tap: { id: map_rotate }
+  - pause: { secs: 1.0 }
+  - assert_text: { id: map_bearing, text: "Bearing 45°" }
+  - tap: { id: map_north }
+  - pause: { secs: 1.0 }
+  - assert_text: { id: map_bearing, text: "North up" }
+  - select: { id: map_provider, index: 0 }
+  - pause: { secs: 1.0 }
+  - select: { id: map_provider, index: 1 }
+  - pause: { secs: 4.0 }
+  - assert_text: { id: map_status, text: "Ready" }
+  - screenshot: google-maps-remounted

@@ -37,3 +37,19 @@ day launch -t web-dom
 to the built-in sample, taps its marker, flies, fits, turns, twists, zooms out to the island,
 drags, pinches and pans it, switches to the recorded Liberty style and taps London, and saves
 screenshots under `build/day/screenshots/`.
+
+## Native providers
+
+The provider picker offers OpenStreetMap and Apple Maps on iOS/macOS, and OpenStreetMap and Google Maps
+on Android. Other platforms use OpenStreetMap through Day’s canvas renderer. The shared camera and markers survive switching;
+style, language, and tile diagnostics apply only to the canvas renderer. Switching back remounts its renderer.
+
+Apple uses the system MapKit framework without a service key. For Google Maps, configure
+`com.google.android.geo.API_KEY` in `platform/android/AndroidManifest.xml` and run on a device
+with Google Play services. The demo uses Skip Showcase's development sample key so the two
+providers can be compared immediately. Configure your own Android-restricted key for your app.
+See the [provider setup and API guide](../README.md).
+
+`dayscript/google.yaml` checks live Google Maps loading, camera controls, and switching away
+and back. It requires network access and a key authorized for the app. Run it with
+`day launch -t android-material --script dayscript/google.yaml --keep-alive` from `demo/`.

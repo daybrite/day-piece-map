@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! Runs MapLibre's expression fixtures (`tests/data/expression`, see `tests/data/README.md`)
-//! against `day_piece_map::expression`.
+//! against `day_piece_map_canvas::expression`.
 //!
 //! Each `test.json` holds an `expression` (optionally with a `propertySpec`), the `expected`
 //! compilation result (success with its type and constancy, or an error) and, for successes,
@@ -11,10 +11,10 @@
 //! and images as the objects the reference serializes, and numbers are compared at the six
 //! significant digits the fixtures were written with.
 
-use day_piece_map::expression::{
+use day_piece_map_canvas::expression::{
     Context, Expression, FunctionHints, PropertySpec, Type, is_expression,
 };
-use day_piece_map::{Feature, FormattedSection, GeometryType, Value};
+use day_piece_map_canvas::{Feature, FormattedSection, GeometryType, Value};
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

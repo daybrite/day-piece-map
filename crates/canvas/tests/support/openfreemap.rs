@@ -5,9 +5,9 @@
 //! tiles around central London, served from `tests/data/openfreemap` through `day-part-http`'s
 //! `Simulation` so the map renders the real style with no network.
 //!
-//! Shared by the piece's integration test (`tests/openfreemap.rs`) and the demo
-//! (`demo/src/offline.rs`), which both reach this file with `#[path]`. It stays out of the
-//! library so no app that depends on the piece carries the recording.
+//! Used only by the renderer's integration test (`tests/openfreemap.rs`). The demo carries a
+//! matching recording under its generated resource bundle so application code uses asset accessors.
+//! These test bytes remain outside the library and are not included in dependent applications.
 //!
 //! The answers are the server's own bytes and headers. The tiles go out exactly as they came
 //! over the wire, gzip with `content-encoding: gzip`: a native transport would inflate them

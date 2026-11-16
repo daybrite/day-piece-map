@@ -3,146 +3,239 @@ Copyright © The Daybrite Project
 SPDX-License-Identifier: MPL-2.0
 -->
 
-# day-piece-map
+# Day maps
 
-A vector map for Day apps: a MapLibre style over vector tiles, drawn on the canvas.
+Show locations, annotations, and geographic overlays with a shared Rust API and a choice of map providers.
 
-[Day](https://daybrite.dev/docs/) is a Rust framework for building apps with native desktop and
-mobile controls, plus HTML controls on the web.
+| Crate | Responsibility | Platforms |
+| --- | --- | --- |
+| `day-piece-map` | Camera state, markers, overlays, interactions, and loading state | All Day targets |
+| `day-piece-map-canvas` | Day's canvas renderer, supporting MapLibre styles, vector tiles, and PMTiles | All Day targets |
+| `day-piece-map-apple` | Apple Maps through MapKit, implemented in Swift | iOS/UIKit and macOS/AppKit |
+| `day-piece-map-google` | Google Maps SDK for Android, implemented in Java | Android/Material |
 
-The piece takes a [MapLibre style](https://maplibre.org/maplibre-style-spec/) and draws it from
-[Mapbox Vector Tiles](https://github.com/mapbox/vector-tile-spec) with Day's canvas: fills, lines,
-circles, text labels placed so they do not collide, and sprite icons. Every frame is a display
-list the toolkit replays, so the same style draws the same map on macOS, iOS, Android, Windows,
-Linux, HarmonyOS and the web, with no map SDK and no WebView. The style engine, the tile sources
-and the symbol placement follow [MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js), and
-the expression engine passes MapLibre's own test suite.
+The base crate depends on no provider. Apple and Google do not pull in the canvas renderer or
+its tile networking. Applications can depend on one provider or mount different providers using
+the same shared view. Each provider is an independently publishable workspace crate.
 
-## Use
+## Dependencies
 
-Add `day-piece-map = "0.*"` to your app's `[dependencies]` and build with the Day CLI:
+For an application offering every provider supported on its target:
+
+```toml
+[dependencies]
+day-piece-map = "0.*"
+day-piece-map-canvas = "0.*"
+day-piece-map-apple = "0.*"
+day-piece-map-google = "0.*"
+
+[features]
+appkit = ["day/appkit"]
+uikit = ["day/uikit"]
+material = ["day/material"]
+```
+
+Keep the application's other toolkit features. The native providers declare their backends in
+`package.metadata.day.piece`; the CLI enables the matching renderer feature automatically.
+The canvas renderer needs no toolkit feature of its own. For direct Cargo checks, enable the provider's
+`appkit`, `uikit`, or `material` feature explicitly.
+Build native apps with `day build`: Cargo alone does not compile the contributed Swift/Java sources.
+
+## Shared state
 
 ```rust
 use day::prelude::*;
-use day_piece_map::{LngLat, MapView, Marker, map};
+use day_piece_map::{LngLat, MapView, Marker, Overlay};
 
-fn page() -> impl Piece {
-    let view = MapView::new(LngLat::new(-0.1276, 51.5072), 12.0);
-    column((
-        map("https://tiles.openfreemap.org/styles/liberty", view).grow(Dimension::Both),
-        label(move || view.attribution.get()).font(Font::Caption),
-    ))
-}
+let view = MapView::new(LngLat::new(-0.1276, 51.5072), 12.0);
+let marker = view.add_marker(
+    Marker::new(LngLat::new(-0.0877, 51.5055))
+        .title(res::str::destination().format())
+        .subtitle(res::str::destination_detail().format()),
+);
+view.overlays.set(vec![Overlay::Polyline {
+    points: vec![view.center.get_untracked(), LngLat::new(-0.0877, 51.5055)],
+    color: Color::rgb(0.0, 0.4, 0.9),
+    width: 3.0,
+}]);
+let piece = day_piece_map_canvas::map(
+    "https://tiles.openfreemap.org/styles/liberty",
+    day_piece_map_canvas::CanvasMapView::with_view(view),
+);
 ```
 
-`map` takes a style URL, the style's JSON itself, or a reactive value of either, which reloads
-the map when it changes (a light and a dark style, say). `MapView` is the state you share with
-the map: `center` and `zoom` move it when you write them and follow the user when they pan,
-pinch, drag, scroll or wheel; `language` picks the language of the labels where the data has
-it (`fr` shows `name:fr`, the local name otherwise); `status`, `attribution`, `pending` and
-`frame` report what the piece is doing. The map draws the attribution in its corner, as the
-tile services require.
+The resource accessors above stand for messages in the application's Fluent catalog. Marker
+text may also come directly from user data or a place-data service. Providers do not translate it.
 
-### Gestures
+- `center`, `zoom`, and `bearing` are reactive and bidirectional. Write them to move the camera;
+  native camera callbacks and canvas gestures update them after movement.
+- `jump_to`, `jump_to_with`, `zoom_by`, `fly_to`, `fly_to_with`, `fit_bounds`, `rotate_to`, and
+  `reset_north` control the mounted map. Animation commands issued before mounting are not replayed;
+  initialize the camera with `MapView::new` or `jump_to` instead.
+- Coordinates use WGS84 degrees in **longitude, latitude** order. Zoom uses a 512-logical-point
+  Mercator world at level zero. The Google adapter converts to its SDK's 256-point convention;
+  MapKit converts between visible map extent and zoom. Native limits and pitch can affect the result.
+- Marker IDs survive updates. Use `update_marker`, `remove_marker`, `clear_markers`, and `marker`;
+  `tap` reports the geographic position, local logical point, and optional marker ID.
+- `Overlay` supports polylines, polygons, and circles. Widths are logical points and radii are
+  meters. Polygons have one exterior ring. Overlay hit testing and arbitrary native annotation
+  views are not part of this shared API.
+- `interaction` enables or disables pan, zoom, and rotation gestures independently. Programmatic
+  commands remain available. Provider-specific pitch is configured through native options.
+- `status` reports loading, readiness, or a diagnostic error. Map error codes to localized app
+  messages; do not display diagnostic strings as UI. Readiness does not guarantee every tile has
+  loaded. Google authorization failures can leave the SDK loading without a useful error callback.
+- Native SDKs retain their attribution controls. The canvas renderer shows compact, clickable source credits
+  at the lower-left, including “© OpenStreetMap contributors” linked to
+  [OpenStreetMap's copyright page](https://www.openstreetmap.org/copyright) and any other credits
+  required by the selected source.
+  `attribution` exposes source credit text where available; an empty native value is not permission
+  to hide the SDK's attribution.
 
-One finger drags, two pinch to zoom and twist to turn, and a wheel or trackpad pans and
-zooms, on every platform. A swipe glides on and slows the way Apple Maps and Google Maps do,
-a pinch carries its speed on for a moment, a double tap zooms in a level about the spot, and
-a twist that ends near north settles on north. A finger down stops any glide or flight.
+Keep one `MapView` attached to **one mounted provider at a time**. Create it outside a `switch`
+arm; switching disposes the old map and preserves shared camera, markers, and overlays. Cameras
+are shared at rest; providers choose their animation path. MapKit treats a positive requested
+animation duration as an animation request and chooses its duration. Google and the canvas renderer use the
+requested duration. `fit_bounds` resets heading; a southwest longitude larger than northeast
+means the bounds cross the antimeridian.
 
-### Markers, taps and the camera
+## Canvas renderer extensions
 
 ```rust
-let view = MapView::new(LngLat::new(-0.1276, 51.5072), 12.0);
-let bridge = view.add_marker(Marker::new(LngLat::new(-0.0877, 51.5055)).title("Tower Bridge"));
-Effect::new(move || {
-    if let Some(tap) = view.tap.get() {
-        if tap.marker == Some(bridge) {
-            view.fly_to(LngLat::new(-0.0877, 51.5055), 16.0);
-        } else if let Some(hit) = tap.features.first() {
-            info!("{}: {:?}", hit.layer, hit.properties.get("name"));
-        }
-    }
-});
+let canvas_view = day_piece_map_canvas::CanvasMapView::with_view(view);
+canvas_view.set_language(Some("fr"));
+let piece = day_piece_map_canvas::map(style_url, canvas_view);
 ```
 
-- `add_marker`, `remove_marker`, `clear_markers` and `marker` manage pins with a title; they
-  stay upright when the map turns.
-- `tap` is the last tap: its point and position, the marker under it if any, else the
-  features the style drew there, topmost first, each with its style layer, source layer and
-  properties. A double tap zooms instead and is not reported.
-- `fly_to` glides to a position and zoom over a second, dipping out to show the way on a long
-  flight; `fly_to_with` sets the bearing and duration too; `fit_bounds` frames a box with
-  padding; `rotate_to` and `reset_north` turn the map; `bearing` is the current turn in
-  degrees; `jump_to` cuts straight there.
+`CanvasMapView` owns `common: MapView` plus label-language selection, tile counts (`pending`),
+renderer statistics (`frame`), and `feature_hits` for the last basemap tap. Access camera and
+marker methods through `common`, and read all taps from `common.tap`. There is no second tap
+signal. Keep one wrapper and pass it explicitly to `map` or `map_with_client`; constructing a
+new wrapper creates fresh language and diagnostic state.
 
-### Tiles
+The provider retains style JSON/URL inputs, reactive style changes, custom HTTP clients,
+expression evaluation, vector tile decoding, sprites, sample data, and PMTiles sources.
+See the [canvas renderer reference](crates/canvas/README.md) for its rendering limits.
+Day's canvas renderer supports a subset of the MapLibre style specification and renders vector tiles directly.
+It can display OpenStreetMap-based maps or custom geographic data. It does not embed a MapLibre SDK.
 
-A style's `vector` sources resolve two ways:
+## Apple extensions and Swift bridge
 
-- A z/x/y URL template, given inline in `tiles` or through the TileJSON document at `url`.
-  This is what every hosted tile service speaks, [OpenFreeMap](https://openfreemap.org) among
-  them with no API key.
-- A [PMTiles](https://github.com/protomaps/PMTiles) archive, named as `pmtiles://https://…` or
-  by a URL ending in `.pmtiles`: one static file on any object storage, read with HTTP range
-  requests. Self-host the planet, or an extract of your region, with nothing but storage.
+```rust
+use day_piece_map_apple::{AppleMapBuilder, AppleOptions, MapType};
+let options = Signal::new(AppleOptions {
+    map_type: MapType::Hybrid,
+    traffic: true,
+    buildings: true,
+    ..AppleOptions::default()
+});
+let piece = day_piece_map_apple::map(view).options(options);
+```
 
-Everything is fetched through `day-part-http`, so requests go through the platform's own network
-stack and a test intercepts them with its `Simulation`.
+Options include standard/satellite/hybrid basemaps, traffic, buildings, points of interest,
+compass visibility, and camera pitch. Bind `AppleOptions` to a signal to change them live.
+MapKit selects its label language from the system; it does not consume the canvas renderer's language setting.
+MapKit annotation callouts show the shared title and subtitle.
 
-### How a frame is drawn
+The adapter uses **Swift MapKit APIs on `MKMapView`**, on both AppKit and UIKit. Its metadata
+contributes `platform/swift` through `[package.metadata.day.macos]` and
+`[package.metadata.day.ios]`, and declares `frameworks = ["MapKit"]`. This follows Lottie's Swift
+source and C-ABI bridge technique. MapKit is supplied by Apple, so there is no remote SwiftPM
+dependency. Day compiles the source into its generated Swift package and links the framework.
 
-The base of the map (background, fills, lines, circles) is rasterized once per screen tile at
-the current zoom, through the toolkit's offscreen painter (which paints on a background thread
-on macOS, iOS and Android), and the frames blit those bitmaps: a pan or a zoom costs a few
-dozen image draws however dense the city. While a tile's raster is
-being painted, a scaled ancestor or its children stand in, so zooming never shows a hole.
-Labels and icons are placed over the bitmaps and kept as one more bitmap, placed again when the
-view has moved a quarter of its width, zoomed, or gained tiles, so text stays crisp while
-panning. Tiles are decoded and filtered off the UI thread. `MapView::frame` reports what a
-frame drew, and `DAY_LOG=debug` logs every frame, raster and placement with its timing.
+The Swift view owns its delegate state. Rust owns the retained native view. Renderer release
+clears callbacks and delegate references before Day releases the view. These APIs fit Day's
+existing deployment floors; newer MapKit APIs must be guarded in Swift when added.
 
-### What it draws
+## Google extensions and Android setup
 
-Layer types `background`, `fill`, `line`, `symbol` and `circle`, which is what a basemap is made
-of; a `fill-extrusion` draws flat. The expression language is complete except for `distance`,
-`within`, `heatmap-density` and `elevation`, legacy stop functions and legacy filters included.
-Text is drawn in the platform's own fonts: a style's `text-font` names pick the weight and the
-slant, and the glyph server a style names is never contacted. Label placement follows MapLibre's
-rules: along lines where the line is straight enough, point labels anchored and offset as the
-style says, sorted by `symbol-sort-key`, and dropped when they would overlap a label placed
-before them.
+```rust
+use day_piece_map_google::{GoogleMapBuilder, GoogleOptions, MapType};
+let options = Signal::new(GoogleOptions {
+    map_type: MapType::Terrain,
+    traffic: true,
+    indoor: true,
+    zoom_controls: true,
+    ..GoogleOptions::default()
+});
+let piece = day_piece_map_google::map(view).options(options);
+```
 
-Icons and `fill-pattern` draw from the style's sprite, which the canvas cuts regions of on every
-Day toolkit. Not drawn: `raster`, `hillshade`, `heatmap` and `sky` layers, `line-pattern`,
-`line-gap-width` (the width is drawn, the gap is not), and pitch; bearing is drawn, as the two-finger twist shows.
+Options include normal/satellite/terrain/hybrid/empty basemaps, traffic, indoor maps, buildings,
+compass, zoom controls, pitch, and local Google style JSON (`style_json`). MapLibre style JSON
+cannot be used as Google style JSON. Google marker color uses its standard marker hue and alpha;
+it does not reproduce arbitrary saturation and brightness. Labels use the SDK's locale.
 
-## Testing
+Like Lottie's Android adapter, the crate contributes Java source and its Maven dependency through
+`[package.metadata.day.android]`. Day adds `com.google.android.gms:play-services-maps:20.0.0` to
+the generated Gradle project. That SDK requires Android API 23 or later and Google Play services.
+The provider also contributes an optional `org.apache.http.legacy` manifest entry for devices
+whose Play services Maps module uses the fallback renderer; applications need no manual entry.
+The adapter forwards attachment, activity resume/pause/start/stop, low-memory, state-saving, and
+final destruction to the SDK's `MapView`. Switching providers unregisters activity callbacks and
+removes native map listeners. Day's shared camera is the source of state when a view is remounted.
 
-`tests/expression.rs` runs MapLibre's expression fixtures, vendored under `tests/data/expression`
-(see [tests/data/README.md](tests/data/README.md) for provenance and license). The tile sources
-are tested against intercepted HTTP, with an in-memory PMTiles archive answering range requests.
-The renderer is tested on hand-built tiles, and `tests/openfreemap.rs` renders London from
-OpenFreeMap's Liberty style as the live server sent it: the style, TileJSON, sprite and tiles
-under `tests/data/openfreemap` are unmodified recordings (see its README for provenance and
-licenses), answered by a strict `Simulation`, so nothing comes from the network. `tests/map.rs`
-drives the piece on the mock toolkit: gestures, flings, flights, fits, turns, taps and double
-taps. `demo/dayscript/demo.yaml` is the test on a real toolkit: it switches the demo to the
-built-in island served in-process, taps its marker, flies, fits, turns, pans and zooms it, then
-draws the recorded Liberty style and taps that.
+Enable **Maps SDK for Android** in a Google Cloud project with billing, create a key restricted
+to the application's Android package and signing certificate, and supply it through the app's
+`platform/android/AndroidManifest.xml` overlay:
 
-## Demo
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <meta-data android:name="com.google.android.geo.API_KEY"
+                   android:value="YOUR_ANDROID_RESTRICTED_KEY" />
+    </application>
+</manifest>
+```
 
-[`demo/`](demo/README.md) is a one-page app with the map, a picker between OpenFreeMap's and
-VersaTiles' styles, the built-in sample and the recorded Liberty style, a language picker, zoom
-and camera buttons and a readout of where the map is and what was tapped. From `demo/`, run
-`day launch -t macos-appkit --script dayscript/demo.yaml`, or any target its `Day.toml` lists.
+Use your build's secret/configuration injection for the value. The demo uses Skip Showcase's
+development sample key; the Day Showcase overlay remains empty until configured. Use your own
+Android-restricted key for your application. Missing keys report `missing-api-key`; unavailable Google
+Play services report `play-services-unavailable`. No account or key is needed for the bundled OpenStreetMap sources or
+native Apple Maps. The map adapters do not request device location permission: add a user-location
+marker using the separate Day location and permissions APIs if your application needs one.
 
-## Documentation
+See Google's [setup guide](https://developers.google.com/maps/documentation/android-sdk/config)
+and [MapView lifecycle reference](https://developers.google.com/android/reference/com/google/android/gms/maps/MapView).
 
-- Rust API: `cargo doc --open`
-- [The MapLibre style spec](https://maplibre.org/maplibre-style-spec/): what a style can say
-- [MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js): the design this follows
+## Provider selection and extension
+
+The [demo](demo/src/lib.rs) and [Showcase Maps page](https://github.com/daybrite/Day-Showcase/blob/main/src/pages/map.rs)
+use `switch` with a shared `MapView`: OpenStreetMap/Apple Maps on iOS and macOS, OpenStreetMap/Google Maps on Android,
+and OpenStreetMap elsewhere. The OpenStreetMap selection uses Day's canvas renderer with
+OpenStreetMap-based sources; the same renderer also displays the demo's fictional sample island.
+Provider-specific controls are shown only for their provider.
+`support()` on the native crates reports whether their renderer was compiled. It does not verify
+credentials or network access. Optional features are described by each provider's options.
+
+A new provider depends on the base crate, accepts `MapView`, and exposes its own options and
+operations. There is no registry or closed enum to extend in the base crate. Implement the
+shared signals directly; keep service-specific search, routing, offline management, and platform
+annotation customization in provider crates or separate service parts.
+
+The Apple and Google adapters enable an internal `native-bridge` feature. Its hidden module is
+not an application extension API. It binds separate typed camera, marker, overlay, interaction,
+option, and camera-command patches; only the native FFI boundary encodes each patch as JSON.
+Native camera reports update the shared signals without becoming returning camera commands.
+Annotation and option changes do not reapply an older camera.
+
+Google forwards the mounted view's Activity lifecycle and memory-pressure events. Remounts use
+shared `MapView` state; SDK bundles are not persisted across Activity recreation or process death.
+Apps needing process-death restoration must persist and restore their own map state.
+
+A future HarmonyOS adapter can wrap `@kit.MapKit`'s `MapComponent` and
+`MapComponentController`. That Huawei service must be distinguished from the OpenHarmony
+platform and its location APIs; support cannot be inferred from `target_env = "ohos"` alone.
+See [HarmonyOS provider research](docs/harmonyos.md) for dependencies, capabilities, coordinate
+systems, and proposed integration boundaries. The canvas renderer remains the available implementation there.
+
+## Validation
+
+Run `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` from
+this repository. Native adapters also require toolkit-specific Rust checks and Swift/Android
+SDK builds. Tests retain the MapLibre expression fixtures, recorded OpenFreeMap data, mock
+camera/gesture cases, and shared-state/bridge cases. The demo has a separate Cargo workspace.
+Native map tile services require network access; the canvas sample and recording remain
+available for deterministic walkthroughs.
 
 [Source](https://github.com/daybrite/day-piece-map) · [MPL-2.0 license](LICENSE)
-# day-piece-map

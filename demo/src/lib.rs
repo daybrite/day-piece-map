@@ -13,7 +13,11 @@
 //! same map on every target without a network, which is what the CI screenshots need.
 
 use day::prelude::*;
-use day_piece_map::{LngLat, MapStatus, MapView, Marker, map, sample};
+use day_piece_map::{LngLat, MapStatus, MapView, Marker};
+// Keep provider dependencies available for Day's automatic backend feature discovery.
+use day_piece_map_apple as _;
+use day_piece_map_canvas::{CanvasMapView, map, sample};
+use day_piece_map_google as _;
 
 pub mod offline;
 
@@ -99,15 +103,15 @@ impl Source {
     }
 
     /// Two places worth a marker and a flight between them, and the box that holds both.
-    fn sights(self) -> [(LngLat, &'static str); 2] {
+    fn sights(self) -> [(LngLat, String); 2] {
         match self {
             Source::Sample => [
-                (sample::HOME, "Island center"),
-                (sample::EAST_COAST, "East coast"),
+                (sample::HOME, res::str::sight_island_center().format()),
+                (sample::EAST_COAST, res::str::sight_east_coast().format()),
             ],
             _ => [
-                (TRAFALGAR, "Trafalgar Square"),
-                (BIG_BEN, "Elizabeth Tower"),
+                (TRAFALGAR, res::str::sight_trafalgar_square().format()),
+                (BIG_BEN, res::str::sight_elizabeth_tower().format()),
             ],
         }
     }
@@ -133,72 +137,12 @@ const BIG_BEN: LngLat = LngLat::new(-0.1246, 51.5007);
 /// The languages OpenMapTiles carries names in (`name:<code>` on places, roads, water and
 /// points of interest), by code and English name. A feature without a name in the chosen
 /// language shows the style's own choice.
-const LANGUAGES: [(&str, &str); 65] = [
-    ("am", "Amharic"),
-    ("ar", "Arabic"),
-    ("az", "Azerbaijani"),
-    ("be", "Belarusian"),
-    ("bg", "Bulgarian"),
-    ("br", "Breton"),
-    ("bs", "Bosnian"),
-    ("ca", "Catalan"),
-    ("co", "Corsican"),
-    ("cs", "Czech"),
-    ("cy", "Welsh"),
-    ("da", "Danish"),
-    ("de", "German"),
-    ("el", "Greek"),
-    ("en", "English"),
-    ("eo", "Esperanto"),
-    ("es", "Spanish"),
-    ("et", "Estonian"),
-    ("eu", "Basque"),
-    ("fi", "Finnish"),
-    ("fr", "French"),
-    ("fy", "Western Frisian"),
-    ("ga", "Irish"),
-    ("gd", "Scottish Gaelic"),
-    ("he", "Hebrew"),
-    ("hi", "Hindi"),
-    ("hr", "Croatian"),
-    ("hu", "Hungarian"),
-    ("hy", "Armenian"),
-    ("id", "Indonesian"),
-    ("is", "Icelandic"),
-    ("it", "Italian"),
-    ("ja", "Japanese"),
-    ("ka", "Georgian"),
-    ("kk", "Kazakh"),
-    ("kn", "Kannada"),
-    ("ko", "Korean"),
-    ("ku", "Kurdish"),
-    ("la", "Latin"),
-    ("lb", "Luxembourgish"),
-    ("lt", "Lithuanian"),
-    ("lv", "Latvian"),
-    ("mk", "Macedonian"),
-    ("ml", "Malayalam"),
-    ("mt", "Maltese"),
-    ("nl", "Dutch"),
-    ("no", "Norwegian"),
-    ("oc", "Occitan"),
-    ("pl", "Polish"),
-    ("pt", "Portuguese"),
-    ("rm", "Romansh"),
-    ("ro", "Romanian"),
-    ("ru", "Russian"),
-    ("sk", "Slovak"),
-    ("sl", "Slovenian"),
-    ("sq", "Albanian"),
-    ("sr", "Serbian"),
-    ("sv", "Swedish"),
-    ("ta", "Tamil"),
-    ("te", "Telugu"),
-    ("th", "Thai"),
-    ("tr", "Turkish"),
-    ("uk", "Ukrainian"),
-    ("vi", "Vietnamese"),
-    ("zh", "Chinese"),
+const LANGUAGES: [&str; 65] = [
+    "am", "ar", "az", "be", "bg", "br", "bs", "ca", "co", "cs", "cy", "da", "de", "el", "en", "eo",
+    "es", "et", "eu", "fi", "fr", "fy", "ga", "gd", "he", "hi", "hr", "hu", "hy", "id", "is", "it",
+    "ja", "ka", "kk", "kn", "ko", "ku", "la", "lb", "lt", "lv", "mk", "ml", "mt", "nl", "no", "oc",
+    "pl", "pt", "rm", "ro", "ru", "sk", "sl", "sq", "sr", "sv", "ta", "te", "th", "tr", "uk", "vi",
+    "zh",
 ];
 
 /// The language the device runs in, when the data has it: `fr-FR` picks French.
@@ -211,8 +155,8 @@ fn device_language() -> Option<String> {
         .to_ascii_lowercase();
     LANGUAGES
         .iter()
-        .find(|(c, _)| *c == code)
-        .map(|(c, _)| (*c).to_string())
+        .find(|c| **c == code)
+        .map(|c| (*c).to_string())
 }
 
 /// The page.
@@ -221,6 +165,9 @@ pub fn root() -> impl Piece {
     let source = Signal::new(Source::Liberty);
     let (center, zoom) = Source::Liberty.home();
     let view = MapView::new(center, zoom);
+    let canvas_view = CanvasMapView::with_view(view);
+    let provider = Signal::new(Provider::Canvas);
+    let flights = Signal::new(0usize);
     // The style follows the source, once its routes are in place: the piece reloads on the
     // signal, which this effect writes after installing the simulation the load goes through.
     let style = Signal::new(String::new());
@@ -228,6 +175,7 @@ pub fn root() -> impl Piece {
     // and puts the source's two markers down.
     Effect::new(move || {
         let src = source.get();
+        flights.set(0);
         src.install_simulation();
         let (center, zoom) = src.home();
         view.jump_to(center, zoom);
@@ -257,30 +205,35 @@ pub fn root() -> impl Piece {
     .spacing(Space::S);
     // The language starts as the device's, where the data speaks it, and follows the picker.
     let language = Signal::new(device_language());
-    view.set_language(language.get_untracked().as_deref());
-    Effect::new(move || view.set_language(language.get().as_deref()));
+    canvas_view.set_language(language.get_untracked().as_deref());
+    Effect::new(move || canvas_view.set_language(language.get().as_deref()));
     let mut languages: Vec<(Option<String>, String)> =
         vec![(None, res::str::language_default().format())];
-    languages.extend(
-        LANGUAGES
-            .iter()
-            .map(|(code, name)| (Some((*code).to_string()), format!("{name} ({code})"))),
-    );
-    let source_row = row((
-        picker(
-            source,
-            Source::ALL
-                .iter()
-                .map(|s| (*s, s.title()))
-                .collect::<Vec<_>>(),
+    languages.extend(LANGUAGES.iter().map(|code| {
+        (
+            Some((*code).to_string()),
+            res::str::language_name(*code).format(),
         )
-        .menu()
-        .id(id!(map_source)),
-        picker(language, languages).menu().id(id!(map_language)),
-    ))
-    .spacing(Space::S);
+    }));
+    let source_row = move || {
+        row((
+            picker(
+                source,
+                Source::ALL
+                    .iter()
+                    .map(|s| (*s, s.title()))
+                    .collect::<Vec<_>>(),
+            )
+            .menu()
+            .id(id!(map_source)),
+            picker(language, languages.clone())
+                .menu()
+                .id(id!(map_language)),
+        ))
+        .spacing(Space::S)
+        .fit(RowFit::Wrap { run_spacing: 8.0 })
+    };
     // The camera API: fly between the two sights, fit both, turn and come back north.
-    let flights = Signal::new(0usize);
     let camera_row = row((
         button(res::str::fly())
             .action(move || {
@@ -314,7 +267,8 @@ pub fn root() -> impl Piece {
         })
         .id(id!(map_bearing)),
     ))
-    .spacing(Space::S);
+    .spacing(Space::S)
+    .fit(RowFit::Wrap { run_spacing: 8.0 });
     // What the last tap found: a marker, the topmost feature with a name, or nothing.
     let tap = label(move || match view.tap.get() {
         None => res::str::tap_prompt().format(),
@@ -323,7 +277,12 @@ pub fn root() -> impl Piece {
                 let title = view.marker(id).map_or_default(|m| m.title);
                 return res::str::tap_marker(title).format();
             }
-            match t.features.first() {
+            let features = if provider.get() == Provider::Canvas {
+                canvas_view.feature_hits.get()
+            } else {
+                Vec::new()
+            };
+            match features.first() {
                 None => res::str::tap_nothing().format(),
                 Some(f) => {
                     let name = f
@@ -331,13 +290,13 @@ pub fn root() -> impl Piece {
                         .get("name")
                         .or_else(|| f.properties.get("class"))
                         .map_or_default(|v| match v {
-                            day_piece_map::Value::String(s) => s.clone(),
+                            day_piece_map_canvas::Value::String(s) => s.clone(),
                             other => format!("{other:?}"),
                         });
                     res::str::tap_feature(res::str::TapFeature {
                         layer: f.layer.clone(),
                         name,
-                        count: i64::try_from(t.features.len()).unwrap_or(0),
+                        count: i64::try_from(features.len()).unwrap_or(0),
                     })
                     .format()
                 }
@@ -349,7 +308,7 @@ pub fn root() -> impl Piece {
     let status = label(move || match view.status.get() {
         MapStatus::Loading => res::str::status_loading().format(),
         MapStatus::Ready => res::str::status_ready().format(),
-        MapStatus::Failed(why) => res::str::status_failed(why).format(),
+        MapStatus::Failed(why) => res::str::status_failed(map_failure(&why)).format(),
     })
     .id(id!(map_status));
     let position = label(move || {
@@ -363,23 +322,89 @@ pub fn root() -> impl Piece {
     })
     .id(id!(map_position));
     let frame = label(move || {
-        let f = view.frame.get();
+        if provider.get() != Provider::Canvas {
+            return String::new();
+        }
+        let f = canvas_view.frame.get();
         res::str::frame(res::str::Frame {
             tiles: i64::try_from(f.bitmaps).unwrap_or(0),
             labels: i64::try_from(f.labels).unwrap_or(0),
-            pending: i64::try_from(view.pending.get()).unwrap_or(0),
+            pending: i64::try_from(canvas_view.pending.get()).unwrap_or(0),
         })
         .format()
     })
     .id(id!(map_frame));
     column((
         header,
-        source_row,
+        provider_picker(provider),
+        when(move || provider.get() == Provider::Canvas, source_row),
         camera_row,
-        map(style, view).id(id!(map_canvas)).grow(Dimension::Both),
-        row((status, position)).spacing(Space::M),
-        row((frame, tap)).spacing(Space::M),
+        switch(
+            move || provider.get(),
+            move |selected| {
+                view.tap.set(None);
+                match selected {
+                    Provider::Canvas => map(style, canvas_view).id(id!(map_canvas)).any(),
+                    #[cfg(any(
+                        all(feature = "appkit", target_os = "macos"),
+                        all(feature = "uikit", target_os = "ios")
+                    ))]
+                    Provider::Apple => day_piece_map_apple::map(view).id(id!(map_canvas)).any(),
+                    #[cfg(all(feature = "material", target_os = "android"))]
+                    Provider::Google => day_piece_map_google::map(view).id(id!(map_canvas)).any(),
+                }
+            },
+        )
+        .grow(Dimension::Both),
+        row((status, position))
+            .spacing(Space::M)
+            .fit(RowFit::Wrap { run_spacing: 4.0 }),
+        row((frame, tap))
+            .spacing(Space::M)
+            .fit(RowFit::Wrap { run_spacing: 4.0 }),
     ))
     .spacing(Space::S)
     .padding(Space::M)
+}
+
+/// Available providers follow the compiled toolkit; the shared view survives a switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Provider {
+    Canvas,
+    #[cfg(any(
+        all(feature = "appkit", target_os = "macos"),
+        all(feature = "uikit", target_os = "ios")
+    ))]
+    Apple,
+    #[cfg(all(feature = "material", target_os = "android"))]
+    Google,
+}
+fn provider_picker(provider: Signal<Provider>) -> impl Piece {
+    let choices = [
+        (Provider::Canvas, res::str::map_provider_osm()),
+        #[cfg(any(
+            all(feature = "appkit", target_os = "macos"),
+            all(feature = "uikit", target_os = "ios")
+        ))]
+        (Provider::Apple, res::str::map_provider_apple()),
+        #[cfg(all(feature = "material", target_os = "android"))]
+        (Provider::Google, res::str::map_provider_google()),
+    ];
+    let multiple = choices.len() > 1;
+    when(
+        move || multiple,
+        move || {
+            picker(provider, choices.clone())
+                .segmented()
+                .id(day::id!(map_provider))
+        },
+    )
+}
+fn map_failure(code: &str) -> String {
+    match code {
+        "missing-api-key" => res::str::map_missing_api_key(),
+        "play-services-unavailable" => res::str::map_play_services_unavailable(),
+        _ => res::str::map_load_failed(),
+    }
+    .format()
 }

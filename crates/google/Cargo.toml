@@ -1,0 +1,59 @@
+[package]
+name = "day-piece-map-google"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MPL-2.0"
+repository = "https://github.com/daybrite/day-piece-map"
+description = "Google native maps for Day apps"
+
+[package.metadata.day]
+compat = "0.*"
+
+[package.metadata.day.piece]
+backends = ["material"]
+
+[features]
+material = ["dep:day-toolkit-material", "dep:day-platform-android"]
+
+[package.metadata.day.android]
+java = ["platform/android/DayGoogleMap.java"]
+proguard = ["platform/android/proguard-rules.pro"]
+manifest-components = ["platform/android/components.xml"]
+gradle-dependencies = ["com.google.android.gms:play-services-maps:20.0.0"]
+
+[dependencies]
+day-piece-map = { version = "0.*", path = "../..", features = ["native-bridge"] }
+day-core = "0.*"
+day-pieces = "0.*"
+day-reactive = "0.*"
+day-spec = "0.*"
+serde_json = "1"
+linkme = "0.3"
+
+day-toolkit-material = { version = "0.*", optional = true }
+day-platform-android = { version = "0.*", optional = true }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Day converts between float layout units and the integer pixel, index and FFI types of eight
+# native toolkits. `as` is the only operator for float-to-integer, and these four lints cannot
+# tell that from a narrowing integer cast, so they would need an exception at nearly every site.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+# Function length and short or similar names are style limits this codebase does not follow:
+# geometry is written in `x`/`y`/`w`/`h`, and a backend's realize and patch arms stay in one place.
+many_single_char_names = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+# A backend module imports the whole spec vocabulary, and which names it uses differs with the
+# backend feature and target, so an explicit list is unused or incomplete under some of them.
+wildcard_imports = "allow"
+# Option structs and backend calls mirror native toolkit flags, which are booleans.
+fn_params_excessive_bools = "allow"
+struct_excessive_bools = "allow"
+# Asks for `#[must_use]` on nearly every function that returns a value, including ones called
+# for their effect. Builders are still covered by `return_self_not_must_use`.
+must_use_candidate = "allow"

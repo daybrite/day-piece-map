@@ -11,7 +11,7 @@
 //! only reads: it notes which tiles the camera needs and spawns their fetches, and the fetches
 //! write when they complete.
 
-use crate::camera::{Camera, LngLat, MAX_ZOOM};
+use crate::camera::{Camera, LngLat};
 use crate::render::{self, FeatureHit, Pass, RenderTile, Scene, Sprite, Stats, TileData};
 use crate::source::{SourceSpec, TileId, TileSource};
 use crate::style::Style;
@@ -26,283 +26,40 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// Where a map is in loading its style.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MapStatus {
-    /// The style is being fetched and its sources opened.
-    Loading,
-    /// The style is in and tiles are drawn as they arrive.
-    Ready,
-    /// The style or a source could not be loaded; the message says why.
-    Failed(String),
-}
+pub use day_piece_map::{CameraTarget, MapStatus, Marker, MarkerId};
 
-/// A marker's handle, from [`MapView::add_marker`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MarkerId(u64);
-
-/// A pin on the map at a position, with an optional title shown beside it and a tag the app
-/// uses to know it again when it is tapped.
-#[derive(Clone, Debug, PartialEq)]
-#[must_use]
-pub struct Marker {
-    pub position: LngLat,
-    pub title: String,
-    pub color: Color,
-    /// The app's own key for this marker (an item id, a route key), handed back through
-    /// [`MapView::marker`] when [`MapView::tap`] names it; not shown.
-    pub tag: String,
-}
-
-impl Marker {
-    pub fn new(position: LngLat) -> Marker {
-        Marker {
-            position,
-            title: String::new(),
-            color: Color::rgb(0.86, 0.2, 0.18),
-            tag: String::new(),
-        }
-    }
-
-    pub fn title(mut self, title: impl Into<String>) -> Marker {
-        self.title = title.into();
-        self
-    }
-
-    pub fn tag(mut self, tag: impl Into<String>) -> Marker {
-        self.tag = tag.into();
-        self
-    }
-
-    pub fn color(mut self, color: Color) -> Marker {
-        self.color = color;
-        self
-    }
-}
-
-/// Where the user tapped ([`MapView::tap`]): the point, the position under it, the marker
-/// hit if any, and the map features drawn there, topmost first.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MapTap {
-    pub point: Point,
-    pub location: LngLat,
-    pub marker: Option<MarkerId>,
-    pub features: Vec<FeatureHit>,
-}
-
-/// A move the app asked for, carried out by the piece over `duration` seconds.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CameraRequest {
-    pub(crate) target: CameraTarget,
-    pub(crate) duration: f64,
-    /// Distinguishes one request from the next identical one.
-    pub(crate) serial: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum CameraTarget {
-    /// A view: `None` keeps the current bearing.
-    View {
-        center: LngLat,
-        zoom: f64,
-        bearing: Option<f64>,
-    },
-    /// The north-up view that shows a box whole, `padding` points clear around it.
-    Bounds {
-        sw: LngLat,
-        ne: LngLat,
-        padding: f64,
-    },
-}
-
-/// How long [`MapView::fly_to`] takes, in seconds.
-const FLY_SECS: f64 = 1.0;
-/// How long [`MapView::rotate_to`] takes, in seconds.
-const TURN_SECS: f64 = 0.5;
-/// How long a double tap's zoom step takes, in seconds.
-const TAP_ZOOM_SECS: f64 = 0.3;
-
-/// The state of a map, shared between the piece and the app: where it looks and how close,
-/// which the app sets to move the map and reads to learn where the user took it, plus what
-/// the piece reports back about loading and drawing.
+/// Canvas renderer diagnostics and label configuration alongside a shared camera/annotation view.
 #[derive(Clone, Copy)]
-pub struct MapView {
-    /// The position at the middle of the viewport.
-    pub center: Signal<LngLat>,
-    /// The zoom level, `0.0..=22.0`: each level doubles the scale.
-    pub zoom: Signal<f64>,
-    pub status: Signal<MapStatus>,
-    /// The credit lines the style's sources ask to be shown, joined; empty until the sources
-    /// are open. The map draws it in its bottom-right corner; an app that wants it elsewhere
-    /// too reads it here.
-    pub attribution: Signal<String>,
-    /// Tiles requested and not yet answered.
+pub struct CanvasMapView {
+    pub common: day_piece_map::MapView,
     pub pending: Signal<usize>,
-    /// What the last frame drew.
     pub frame: Signal<Stats>,
-    /// The language labels are shown in, as a BCP 47 language code (`fr`, `zh-Hant`), where
-    /// the data has a name in it; `None` shows the style's own choice, usually the local name.
-    /// Changing it reloads the style with its label fields rewritten (see
-    /// [`crate::style::localize`]).
     pub language: Signal<Option<String>>,
-    /// Degrees the map is turned clockwise: `0.0` is north up. A two-finger twist changes it;
-    /// [`MapView::rotate_to`] and [`MapView::reset_north`] animate it.
-    pub bearing: Signal<f64>,
-    /// The markers shown, in the order added.
-    pub markers: Signal<Vec<(MarkerId, Marker)>>,
-    /// The last tap on the map, with what was under it. A double tap zooms instead and is not
-    /// reported here.
-    pub tap: Signal<Option<MapTap>>,
-    pub(crate) request: Signal<Option<CameraRequest>>,
-    next_marker: Signal<u64>,
+    /// Basemap features at the last shared tap; empty for marker taps.
+    /// The tap itself is reported only through `common.tap`.
+    pub feature_hits: Signal<Vec<FeatureHit>>,
 }
-
-impl MapView {
-    pub fn new(center: LngLat, zoom: f64) -> MapView {
-        MapView {
-            center: Signal::new(center.wrapped()),
-            zoom: Signal::new(zoom.clamp(0.0, MAX_ZOOM)),
-            status: Signal::new(MapStatus::Loading),
-            attribution: Signal::new(String::new()),
+impl CanvasMapView {
+    pub fn new(center: LngLat, zoom: f64) -> Self {
+        Self::with_view(day_piece_map::MapView::new(center, zoom))
+    }
+    /// Add renderer-specific state to a shared map. Keep this value alongside the shared
+    /// view and pass the same value to `map`; constructing another wrapper creates fresh state.
+    pub fn with_view(common: day_piece_map::MapView) -> Self {
+        Self {
+            common,
             pending: Signal::new(0),
             frame: Signal::new(Stats::default()),
             language: Signal::new(None),
-            bearing: Signal::new(0.0),
-            markers: Signal::new(Vec::new()),
-            tap: Signal::new(None),
-            request: Signal::new(None),
-            next_marker: Signal::new(1),
+            feature_hits: Signal::new(Vec::new()),
         }
     }
-
-    /// Put a marker on the map.
-    pub fn add_marker(&self, marker: Marker) -> MarkerId {
-        let id = MarkerId(self.next_marker.get_untracked());
-        self.next_marker.set(id.0 + 1);
-        let mut markers = self.markers.get_untracked();
-        markers.push((id, marker));
-        self.markers.set(markers);
-        id
-    }
-
-    /// Replace a marker in place, keeping its id: a new title or position. `false` when `id`
-    /// is no longer on the map.
-    pub fn update_marker(&self, id: MarkerId, marker: Marker) -> bool {
-        let mut markers = self.markers.get_untracked();
-        let Some(slot) = markers.iter_mut().find(|(m, _)| *m == id) else {
-            return false;
-        };
-        slot.1 = marker;
-        self.markers.set(markers);
-        true
-    }
-
-    /// Take a marker off the map.
-    pub fn remove_marker(&self, id: MarkerId) {
-        let mut markers = self.markers.get_untracked();
-        markers.retain(|(m, _)| *m != id);
-        self.markers.set(markers);
-    }
-
-    pub fn clear_markers(&self) {
-        self.markers.set(Vec::new());
-    }
-
-    /// The marker with `id`, if it is still on the map.
-    pub fn marker(&self, id: MarkerId) -> Option<Marker> {
-        self.markers
-            .get_untracked()
-            .into_iter()
-            .find(|(m, _)| *m == id)
-            .map(|(_, marker)| marker)
-    }
-
-    /// Glide to `center` at `zoom` over about a second, rising and settling the way Apple
-    /// Maps and Google Maps fly: a long flight zooms out across the distance and back in.
-    pub fn fly_to(&self, center: LngLat, zoom: f64) {
-        self.fly_to_with(center, zoom, None, FLY_SECS);
-    }
-
-    /// [`MapView::fly_to`] with the bearing to arrive at (`None` keeps the current one) and
-    /// the flight's duration in seconds; `0.0` jumps.
-    pub fn fly_to_with(&self, center: LngLat, zoom: f64, bearing: Option<f64>, duration: f64) {
-        self.request_move(
-            CameraTarget::View {
-                center: center.wrapped(),
-                zoom: zoom.clamp(0.0, MAX_ZOOM),
-                bearing,
-            },
-            duration,
-        );
-    }
-
-    /// Glide to the north-up view that shows the box from `sw` to `ne` whole, with `padding`
-    /// points kept clear on every side.
-    pub fn fit_bounds(&self, sw: LngLat, ne: LngLat, padding: f64) {
-        self.request_move(
-            CameraTarget::Bounds {
-                sw: sw.wrapped(),
-                ne: ne.wrapped(),
-                padding: padding.max(0.0),
-            },
-            FLY_SECS,
-        );
-    }
-
-    /// Turn to `bearing` degrees (clockwise, `0.0` north up) over half a second, the position
-    /// at the center held.
-    pub fn rotate_to(&self, bearing: f64) {
-        self.request_move(
-            CameraTarget::View {
-                center: self.center.get_untracked(),
-                zoom: self.zoom.get_untracked(),
-                bearing: Some(bearing),
-            },
-            TURN_SECS,
-        );
-    }
-
-    /// Turn back to north up.
-    pub fn reset_north(&self) {
-        self.rotate_to(0.0);
-    }
-
-    fn request_move(&self, target: CameraTarget, duration: f64) {
-        let serial = self
-            .request
-            .get_untracked()
-            .map_or(1, |r| r.serial.wrapping_add(1));
-        self.request.set(Some(CameraRequest {
-            target,
-            duration: duration.max(0.0),
-            serial,
-        }));
-    }
-
-    /// Show labels in `language` where the data has them (`MapView::language`).
     pub fn set_language(&self, language: Option<&str>) {
         self.language.set(language.map(str::to_string));
     }
-
-    /// Zoom by `levels` (negative zooms out), keeping the center.
-    pub fn zoom_by(&self, levels: f64) {
-        let z = (self.zoom.get_untracked() + levels).clamp(0.0, MAX_ZOOM);
-        self.zoom.set(z);
-    }
-
-    /// Look at `center` from `zoom`, at once.
-    pub fn jump_to(&self, center: LngLat, zoom: f64) {
-        self.center.set(center.wrapped());
-        self.zoom.set(zoom.clamp(0.0, MAX_ZOOM));
-    }
-
-    /// [`MapView::jump_to`] with the bearing too (`0.0` is north up).
-    pub fn jump_to_with(&self, center: LngLat, zoom: f64, bearing: f64) {
-        self.jump_to(center, zoom);
-        self.bearing.set(crate::camera::wrap_bearing(bearing));
-    }
 }
-
+const TAP_ZOOM_SECS: f64 = 0.3;
+const TURN_SECS: f64 = 0.5;
 /// The marker that lets a string literal be a style (`map("<https://…",> view)`), next to the
 /// `String`, `Signal<String>` and closure forms `IntoReactive` already covers.
 pub struct StyleText;
@@ -317,7 +74,10 @@ impl IntoReactive<String, StyleText> for &str {
 /// document itself when the string starts with `{`; a reactive style (a `Signal<String>` or a
 /// closure) reloads the map when it changes, which is how an app switches between a light and
 /// a dark style.
-pub fn map<M>(style: impl IntoReactive<String, M>, view: MapView) -> impl Piece {
+pub fn map<M>(
+    style: impl IntoReactive<String, M>,
+    view: CanvasMapView,
+) -> day_pieces::Decorated<impl Piece> {
     map_with_client(style, view, day_part_http::Client::new())
 }
 
@@ -471,7 +231,8 @@ struct Raster {
 
 struct Shared {
     state: RefCell<State>,
-    view: MapView,
+    view: CanvasMapView,
+    credits: Signal<Vec<crate::attribution::Credit>>,
     repaint: Trigger,
     /// The window's frame clock, captured while the piece is built (docs/frames.md).
     clock: day_core::frame::FrameClock,
@@ -500,8 +261,10 @@ impl Shared {
         st.labels = None;
         st.labels_tiles = 0;
         drop(st);
-        self.view.status.set(MapStatus::Loading);
-        self.view.attribution.set(String::new());
+        self.view.common.status.set(MapStatus::Loading);
+        self.view.common.attribution.set(String::new());
+        self.view.feature_hits.set(Vec::new());
+        self.credits.set(Vec::new());
         self.view.pending.set(0);
         self.repaint.notify();
     }
@@ -512,9 +275,9 @@ impl Shared {
 /// cache or headers with its map.
 pub fn map_with_client<M>(
     style: impl IntoReactive<String, M>,
-    view: MapView,
+    view: CanvasMapView,
     client: day_part_http::Client,
-) -> impl Piece {
+) -> day_pieces::Decorated<impl Piece> {
     let style = style.into_reactive();
     let shared = Rc::new(Shared {
         state: RefCell::new(State {
@@ -553,9 +316,10 @@ pub fn map_with_client<M>(
             last_tap: None,
             tap_timer: None,
             frame_tiles: Vec::new(),
-            request_serial: 0,
+            request_serial: view.common.request.get_untracked().map_or(0, |r| r.serial),
         }),
         view,
+        credits: Signal::new(Vec::new()),
         repaint: Trigger::new(),
         clock: day_core::frame::FrameClock::current(),
         alive: Cell::new(true),
@@ -563,7 +327,15 @@ pub fn map_with_client<M>(
     });
     {
         let shared = shared.clone();
-        day_reactive::Scope::current().on_cleanup(move || shared.alive.set(false));
+        day_reactive::Scope::current().on_cleanup(move || {
+            shared.alive.set(false);
+            let mut state = shared.state.borrow_mut();
+            stop_motion(&mut state);
+            state.tap_timer = None;
+            state.frame = None;
+            state.pump = None;
+            state.retry = None;
+        });
     }
     {
         // The style is tracked here and nowhere else: a change reloads, a frame never does.
@@ -580,7 +352,7 @@ pub fn map_with_client<M>(
         // Flights and turns the app asks for (`MapView::fly_to` and friends).
         let shared = shared.clone();
         day_reactive::Effect::new(move || {
-            let Some(request) = shared.view.request.get() else {
+            let Some(request) = shared.view.common.request.get() else {
                 return;
             };
             if shared.state.borrow().request_serial == request.serial {
@@ -609,6 +381,9 @@ pub fn map_with_client<M>(
     let on_drag = {
         let shared = shared.clone();
         move |drag: Drag| {
+            if !shared.view.common.interaction.get_untracked().pan {
+                return;
+            }
             let delta = {
                 let mut st = shared.state.borrow_mut();
                 if drag.phase == DragPhase::Began {
@@ -638,6 +413,9 @@ pub fn map_with_client<M>(
     let on_pan = {
         let shared = shared.clone();
         move |pan: Pan| {
+            if !shared.view.common.interaction.get_untracked().pan {
+                return;
+            }
             // A two-finger pan is bracketed and glides like a drag; a wheel tick is a lone
             // `Changed` and the platform adds its own momentum.
             match pan.phase {
@@ -655,6 +433,9 @@ pub fn map_with_client<M>(
     let on_pinch = {
         let shared = shared.clone();
         move |pinch: Pinch| {
+            if !shared.view.common.interaction.get_untracked().zoom {
+                return;
+            }
             let now = day_core::frame::now_secs();
             let zoom = {
                 let current = camera_now(&shared).zoom;
@@ -708,7 +489,11 @@ pub fn map_with_client<M>(
     };
     let on_rotate = {
         let shared = shared.clone();
-        move |r: Rotate| rotate_by(&shared, r.phase, r.rotation, r.location)
+        move |r: Rotate| {
+            if shared.view.common.interaction.get_untracked().rotate {
+                rotate_by(&shared, r.phase, r.rotation, r.location);
+            }
+        }
     };
     canvas(draw)
         .on_drag(on_drag)
@@ -716,6 +501,10 @@ pub fn map_with_client<M>(
         .on_pinch(on_pinch)
         .on_rotate(on_rotate)
         .on_tap_at(on_tap)
+        .overlay_aligned(
+            Alignment::BottomLeading,
+            crate::attribution::strip(shared.credits),
+        )
 }
 
 /// A two-finger twist (`Decorate::on_rotate`): the map turns about the fingers once the twist
@@ -854,7 +643,7 @@ fn tap_at(shared: &Rc<Shared>, point: Point) {
         st.last_tap = if double { None } else { Some(point) };
         double
     };
-    if double {
+    if double && shared.view.common.interaction.get_untracked().zoom {
         let camera = camera_now(shared);
         let target = camera.zoomed_about((camera.zoom + 1.0).round(), point);
         animate_to(shared, target, TAP_ZOOM_SECS);
@@ -884,6 +673,7 @@ fn report_tap(shared: &Rc<Shared>, point: Point) {
     let location = camera.unproject(point);
     let marker = shared
         .view
+        .common
         .markers
         .get_untracked()
         .iter()
@@ -899,11 +689,11 @@ fn report_tap(shared: &Rc<Shared>, point: Point) {
             None => Vec::new(),
         }
     };
-    shared.view.tap.set(Some(MapTap {
+    shared.view.feature_hits.set(features);
+    shared.view.common.tap.set(Some(day_piece_map::MapTap {
         point,
         location,
         marker,
-        features,
     }));
 }
 
@@ -995,6 +785,67 @@ fn marker_hit(camera: &Camera, marker: &Marker, point: Point) -> bool {
 const MARKER_HEAD: f64 = 9.0;
 const MARKER_STEM: f64 = 18.0;
 
+fn draw_overlays(d: &mut Draw, camera: &Camera, overlays: &[day_piece_map::Overlay]) {
+    use day_piece_map::Overlay;
+    for overlay in overlays {
+        match overlay {
+            Overlay::Polyline {
+                points,
+                color,
+                width,
+            } if points.len() >= 2 => {
+                let mut path = day_spec::Path::default();
+                path.segs
+                    .push(day_spec::PathSeg::Move(camera.project(points[0])));
+                path.segs.extend(
+                    points[1..]
+                        .iter()
+                        .map(|p| day_spec::PathSeg::Line(camera.project(*p))),
+                );
+                d.stroke(Shape::Path(path), *color, width.max(0.0));
+            }
+            Overlay::Polygon {
+                points,
+                fill,
+                stroke,
+                width,
+            } if points.len() >= 3 => {
+                let shape = Shape::Polygon(points.iter().map(|p| camera.project(*p)).collect());
+                d.fill(shape.clone(), *fill);
+                d.stroke(shape, *stroke, width.max(0.0));
+            }
+            Overlay::Circle {
+                center,
+                radius,
+                fill,
+                stroke,
+                width,
+            } => {
+                // Sample a geodesic circle so projection and latitude affect its outline.
+                let lat = center.wrapped().lat.to_radians();
+                let lng = center.wrapped().lng.to_radians();
+                let distance = radius.clamp(0.0, 20_000_000.0) / 6_371_008.8;
+                let points = (0..96)
+                    .map(|i| {
+                        let angle = f64::from(i) * std::f64::consts::TAU / 96.0;
+                        let y = (lat.sin() * distance.cos()
+                            + lat.cos() * distance.sin() * angle.cos())
+                        .asin();
+                        let x = lng
+                            + (angle.sin() * distance.sin() * lat.cos())
+                                .atan2(distance.cos() - lat.sin() * y.sin());
+                        camera.project(LngLat::new(x.to_degrees(), y.to_degrees()))
+                    })
+                    .collect();
+                let shape = Shape::Polygon(points);
+                d.fill(shape.clone(), *fill);
+                d.stroke(shape, *stroke, width.max(0.0));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn draw_markers(d: &mut Draw, camera: &Camera, markers: &[(MarkerId, Marker)]) {
     for (_, m) in markers {
         let p = camera.project(m.position);
@@ -1034,7 +885,12 @@ fn draw_markers(d: &mut Draw, camera: &Camera, markers: &[(MarkerId, Marker)]) {
             Shape::Ellipse(Rect::new(head.x - 3.0, head.y - 3.0, 6.0, 6.0)),
             Color::WHITE,
         );
-        if !m.title.is_empty() {
+        let annotation_text = if m.subtitle.is_empty() {
+            m.title.clone()
+        } else {
+            format!("{}\n{}", m.title, m.subtitle)
+        };
+        if !annotation_text.is_empty() {
             let at = Point::new(head.x + MARKER_HEAD + 6.0, head.y);
             let font = render::font_for(&["Noto Sans Bold".to_string()]);
             let halo = TextStyle {
@@ -1047,10 +903,14 @@ fn draw_markers(d: &mut Draw, camera: &Camera, markers: &[(MarkerId, Marker)]) {
                 font: font.clone(),
             };
             for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                d.text(&m.title, Point::new(at.x + dx, at.y + dy), halo.clone());
+                d.text(
+                    &annotation_text,
+                    Point::new(at.x + dx, at.y + dy),
+                    halo.clone(),
+                );
             }
             d.text(
-                &m.title,
+                &annotation_text,
                 at,
                 TextStyle {
                     color: Color::rgb(0.1, 0.1, 0.1),
@@ -1067,9 +927,9 @@ fn camera_now(shared: &Rc<Shared>) -> Camera {
     let st = shared.state.borrow();
     st.pending.unwrap_or_else(|| {
         Camera::with_bearing(
-            shared.view.center.get_untracked(),
-            shared.view.zoom.get_untracked(),
-            shared.view.bearing.get_untracked(),
+            shared.view.common.center.get_untracked(),
+            shared.view.common.zoom.get_untracked(),
+            shared.view.common.bearing.get_untracked(),
             st.size,
         )
     })
@@ -1093,10 +953,10 @@ fn move_to(shared: &Rc<Shared>, camera: Camera) {
                 st.pending.take()
             };
             if let Some(camera) = camera {
-                shared.view.center.set(camera.center);
-                shared.view.zoom.set(camera.zoom);
-                if shared.view.bearing.get_untracked() != camera.bearing {
-                    shared.view.bearing.set(camera.bearing);
+                shared.view.common.center.set(camera.center);
+                shared.view.common.zoom.set(camera.zoom);
+                if shared.view.common.bearing.get_untracked() != camera.bearing {
+                    shared.view.common.bearing.set(camera.bearing);
                 }
                 let mut st = shared.state.borrow_mut();
                 if st.tracking {
@@ -1142,7 +1002,7 @@ fn end_touch(shared: &Rc<Shared>) {
         (
             Point::new((p1.x - p0.x) / dt, (p1.y - p0.y) / dt),
             t1,
-            shared.view.zoom.get_untracked(),
+            shared.view.common.zoom.get_untracked(),
             st.size,
         )
     };
@@ -1174,10 +1034,10 @@ fn end_touch(shared: &Rc<Shared>) {
         if speed < FLING_STOP_SPEED {
             return std::ops::ControlFlow::Break(());
         }
-        let center = shared2.view.center.get_untracked().to_world();
+        let center = shared2.view.common.center.get_untracked().to_world();
         let moved = Point::new(center.x + v.x * dt, center.y + v.y * dt);
         let camera = Camera::new(LngLat::from_world(moved), zoom, size);
-        shared2.view.center.set(camera.center);
+        shared2.view.common.center.set(camera.center);
         std::ops::ControlFlow::Continue(())
     });
     shared.state.borrow_mut().fling = Some(handle);
@@ -1194,10 +1054,10 @@ fn pan_by(shared: &Rc<Shared>, delta: Point) {
 /// The frame: what the camera needs, fetched if missing, drawn from what has arrived.
 fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
     shared.repaint.track();
-    let center = shared.view.center.get();
-    let zoom = shared.view.zoom.get();
-    let bearing = shared.view.bearing.get();
-    let markers = shared.view.markers.get();
+    let center = shared.view.common.center.get();
+    let zoom = shared.view.common.zoom.get();
+    let bearing = shared.view.common.bearing.get();
+    let markers = shared.view.common.markers.get();
     let camera = Camera::with_bearing(center, zoom, bearing, size);
     let viewport = Rect::from_size(size);
     let (style, sprite, tiles, screen) = {
@@ -1401,6 +1261,7 @@ fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
         d.image(&bitmap, Rect::from_size(size));
         d.restore();
     }
+    draw_overlays(d, &camera, &shared.view.common.overlays.get());
     draw_markers(d, &camera, &markers);
     d.restore();
     let elapsed = started.elapsed();
@@ -1444,8 +1305,7 @@ fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
         stats.bitmaps = blits;
         shared.view.frame.set(stats);
     }
-    draw_attribution(d, size, &shared.view.attribution.get());
-    if shared.view.status.get_untracked() == MapStatus::Loading {
+    if shared.view.common.status.get_untracked() == MapStatus::Loading {
         let message = "Loading";
         d.text(
             message,
@@ -1750,43 +1610,11 @@ fn start_raster(shared: Rc<Shared>, id: TileId, data: DataTiles) {
     });
 }
 
-/// The credit line in the map's bottom-right corner, on a translucent strip, as every map
-/// shows it: the tile services' terms require it to be visible with the map.
-fn draw_attribution(d: &mut Draw, size: Size, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    let font = day_spec::CanvasFont::default();
-    let metrics = day_core::measure_text(text, ATTRIBUTION_SIZE, &font);
-    let (pad_x, pad_y) = (6.0, 3.0);
-    let width = metrics.width + 2.0 * pad_x;
-    let height = metrics.height + 2.0 * pad_y;
-    let strip = Rect::new(
-        (size.width - width).max(0.0),
-        (size.height - height).max(0.0),
-        width,
-        height,
-    );
-    d.fill(Shape::Rect(strip), Color::rgba(1.0, 1.0, 1.0, 0.75));
-    d.text(
-        text,
-        Point::new(strip.origin.x + pad_x, strip.origin.y + pad_y),
-        TextStyle {
-            size: ATTRIBUTION_SIZE,
-            color: Color::rgb(0.2, 0.2, 0.2),
-            anchor: TextAnchor::LEADING,
-            font,
-        },
-    );
-}
-
-/// The attribution strip's text size, in points.
-const ATTRIBUTION_SIZE: f64 = 10.0;
-
 fn fail(shared: &Rc<Shared>, what: &str, error: &Error) {
     log::warn!("day-piece-map: {what}: {error}");
     shared
         .view
+        .common
         .status
         .set(MapStatus::Failed(format!("{what}: {error}")));
     shared.repaint.notify();
@@ -1857,7 +1685,7 @@ fn load_style(shared: Rc<Shared>, style: String, language: Option<String>) {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         if specs.is_empty() {
-            shared.view.status.set(MapStatus::Ready);
+            shared.view.common.status.set(MapStatus::Ready);
         }
         let remaining = Rc::new(Cell::new(specs.len()));
         for (name, spec) in specs {
@@ -1870,22 +1698,28 @@ fn load_style(shared: Rc<Shared>, style: String, language: Option<String>) {
                         if !shared.current(generation) {
                             return;
                         }
-                        if let Some(credit) = source.attribution().map(|c| plain_text(&c)) {
-                            let mut lines = shared.view.attribution.get_untracked();
-                            if !lines.contains(&credit) {
-                                if !lines.is_empty() {
-                                    lines.push_str(" · ");
+                        if let Some(html) = source.attribution() {
+                            let mut credits = shared.credits.get_untracked();
+                            for credit in crate::attribution::parse(&html) {
+                                if !credits.contains(&credit) {
+                                    credits.push(credit);
                                 }
-                                lines.push_str(&credit);
-                                shared.view.attribution.set(lines);
                             }
+                            shared.view.common.attribution.set(
+                                credits
+                                    .iter()
+                                    .map(|credit| credit.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" · "),
+                            );
+                            shared.credits.set(credits);
                         }
                         shared.state.borrow_mut().sources.insert(name, source);
                         remaining.set(remaining.get().saturating_sub(1));
                         if remaining.get() == 0
-                            && shared.view.status.get_untracked() == MapStatus::Loading
+                            && shared.view.common.status.get_untracked() == MapStatus::Loading
                         {
-                            shared.view.status.set(MapStatus::Ready);
+                            shared.view.common.status.set(MapStatus::Ready);
                         }
                         shared.repaint.notify();
                     }
@@ -2091,42 +1925,5 @@ impl Stopwatch {
 
     fn elapsed(&self) -> std::time::Duration {
         std::time::Duration::from_secs_f64((day_core::frame::now_secs() - self.0).max(0.0))
-    }
-}
-
-/// A credit line as text: tile services write their attribution as HTML links, and a label
-/// shows text. Tags go, the common entities are decoded, runs of spaces collapse.
-pub fn plain_text(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut in_tag = false;
-    for ch in html.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    let decoded = out
-        .replace("&copy;", "©")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ");
-    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn attribution_html_becomes_text() {
-        let html = r#"<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> <a href="https://www.openmaptiles.org/" target="_blank">&copy; OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>"#;
-        assert_eq!(
-            super::plain_text(html),
-            "OpenFreeMap © OpenMapTiles Data from OpenStreetMap"
-        );
-        assert_eq!(super::plain_text("plain &amp; simple"), "plain & simple");
     }
 }

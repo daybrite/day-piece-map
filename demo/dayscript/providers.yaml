@@ -1,0 +1,36 @@
+# Provider teardown and remount; native map tiles may require network access.
+name: providers
+description: Switch to a native map and back while retaining the shared annotations and camera.
+flow:
+  - wait_for: { id: map_canvas }
+  - select: { id: map_source, index: 7 }
+  - pause: { secs: 1.0 }
+  - assert_text: { id: map_status, text: "Ready" }
+  - select: { id: map_provider, index: 1, only_on: [appkit, uikit, material] }
+  - pause: { secs: 2.0, only_on: [appkit, uikit, material] }
+  - assert_visible: { id: map_canvas }
+  - screenshot: { name: map-native-provider, only_on: [appkit, uikit, material] }
+  - select: { id: map_provider, index: 0, only_on: [appkit, uikit, material] }
+  - pause: { secs: 1.0 }
+  - assert_text: { id: map_status, text: "Ready" }
+  - tap: { id: map_canvas }
+  - pause: { secs: 0.8 }
+  - assert_text: { id: map_tap, text: "Marker: Island center" }
+
+  # Native Apple camera commands publish their final values back into the shared state.
+  - select: { id: map_provider, index: 1, only_on: [appkit, uikit] }
+  - pause: { secs: 1.0, only_on: [appkit, uikit] }
+  - tap: { id: map_fly, only_on: [appkit, uikit] }
+  - pause: { secs: 2.0, only_on: [appkit, uikit] }
+  - assert_text: { id: map_position, text: "0.3000, 1.1800 at zoom 16.00", only_on: [appkit, uikit] }
+  - tap: { id: map_rotate, only_on: [appkit, uikit] }
+  - pause: { secs: 1.0, only_on: [appkit, uikit] }
+  - assert_text: { id: map_bearing, text: "Bearing 45°", only_on: [appkit, uikit] }
+  - tap: { id: map_north, only_on: [appkit, uikit] }
+  - pause: { secs: 1.0, only_on: [appkit, uikit] }
+  - assert_text: { id: map_bearing, text: "North up", only_on: [appkit, uikit] }
+  - tap: { id: map_fit, only_on: [appkit, uikit] }
+  - pause: { secs: 2.0, only_on: [appkit, uikit] }
+  - assert_text: { id: map_bearing, text: "North up", only_on: [appkit, uikit] }
+  - screenshot: { name: map-native-fitted, only_on: [appkit, uikit] }
+  - select: { id: map_provider, index: 0, only_on: [appkit, uikit] }

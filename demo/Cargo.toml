@@ -26,6 +26,10 @@ name = "dayapp"
 [dependencies]
 day = { package = "day-app", version = "0.*" }
 day-piece-map = { version = "0.*", path = ".." }
+day-piece-map-canvas = { version = "0.*", path = "../crates/canvas" }
+day-piece-map-apple = { version = "0.*", path = "../crates/apple" }
+day-piece-map-google = { version = "0.*", path = "../crates/google" }
+
 # The built-in sample is served through the HTTP part's interception (src/sample.rs).
 day-part-http = "0.*"
 day-geometry = "0.*"
@@ -37,7 +41,7 @@ day-build = { version = "0.*" }
 [workspace]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 
 # Lint policy: Clippy's `pedantic` group, and CI treats every warning as an error. This table
 # matches the one in `day`.

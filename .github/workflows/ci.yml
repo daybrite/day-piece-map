@@ -25,7 +25,46 @@ permissions:
   contents: read
 
 jobs:
+  native-adapters:
+    name: native adapter (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: macos-appkit
+            triple: aarch64-apple-darwin
+            package: day-piece-map-apple
+            feature: appkit
+          - os: macos-latest
+            target: ios-uikit
+            triple: aarch64-apple-ios-sim
+            package: day-piece-map-apple
+            feature: uikit
+          - os: ubuntu-latest
+            target: android-material
+            triple: aarch64-linux-android
+            package: day-piece-map-google
+            feature: material
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+          components: clippy
+      - uses: daybrite/actions/.github/actions/day-deps@v1
+        with:
+          day-deps: ${{ inputs.day-main && 'main' || 'auto' }}
+      - uses: daybrite/actions/.github/actions/setup-day-deps@v1
+        with:
+          target: ${{ matrix.target }}
+          pack: "false"
+          rust: "false"
+      - name: Lint native adapter
+        run: cargo clippy -p ${{ matrix.package }} --features ${{ matrix.feature }} --target ${{ matrix.triple }} --all-targets -- -D warnings
   ci:
+    needs: native-adapters
     uses: daybrite/actions/.github/workflows/daylib.yml@v1
     permissions:
       contents: write # the demo's release assets on a version tag
@@ -34,6 +73,6 @@ jobs:
     secrets: inherit
     with:
       day-main: ${{ inputs.day-main || false }}
-      scripts: dayscript/demo.yaml
+      scripts: dayscript/demo.yaml dayscript/providers.yaml
       themes: light dark
       deploy-web: true

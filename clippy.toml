@@ -13,5 +13,5 @@ doc-valid-idents = [
     "SwiftPM", "SwiftUI", "SystemUI", "UIKit", "VoiceOver", "WebSockets", "WebView2",
     "WinHTTP", "WinRT", "WinUI",
     # This repository's own.
-    "GeoJSON", "MapLibre", "OpenFreeMap", "OpenMapTiles", "PMTiles", "TileJSON", "VersaTiles",
+    "GeoJSON", "MapKit", "MapLibre", "OpenFreeMap", "OpenMapTiles", "PMTiles", "TileJSON", "VersaTiles",
 ]

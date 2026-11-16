@@ -11,8 +11,7 @@ mod recording;
 use day_mock::{MockProbe, MockToolkit};
 use day_part_http::Client;
 use day_part_http::simulation::{ManualClock, Simulation};
-use day_piece_map::{LngLat, MapStatus, MapView, map_with_client};
-use day_pieces::prelude::*;
+use day_piece_map_canvas::{CanvasMapView, LngLat, MapStatus, map_with_client};
 use day_reactive::flush_sync;
 use day_spec::WindowOptions;
 use std::cell::RefCell;
@@ -24,7 +23,7 @@ struct Fixture {
     _probe: MockProbe,
     clock: ManualClock,
     sim: Simulation,
-    view: MapView,
+    view: CanvasMapView,
     /// Requests no recorded route answered; strict, so each one failed.
     unanswered: Arc<Mutex<Vec<String>>>,
     /// Frame requests the piece made; the mock toolkit delivers none, so the test does.
@@ -56,7 +55,7 @@ fn boot() -> Fixture {
     }
     let client = Client::builder().transport(sim.clone()).build();
     // The demo's London home: Charing Cross at zoom 15.
-    let view = MapView::new(LngLat::new(-0.1281, 51.5080), 15.0);
+    let view = CanvasMapView::new(LngLat::new(-0.1281, 51.5080), 15.0);
     let frames: Rc<RefCell<Vec<day_spec::FrameCallback>>> = Rc::new(RefCell::new(Vec::new()));
     let (mock, probe) = MockToolkit::new();
     day_core::launch_with(
@@ -98,7 +97,7 @@ impl Fixture {
             self.clock.advance(Duration::from_millis(50));
             self.tick();
             let frame = self.view.frame.get_untracked();
-            let loaded = self.view.status.get_untracked() != MapStatus::Loading
+            let loaded = self.view.common.status.get_untracked() != MapStatus::Loading
                 && self.view.pending.get_untracked() == 0;
             quiet = if loaded && frame == last {
                 quiet + 1
@@ -130,7 +129,7 @@ fn the_recorded_liberty_style_draws_london_offline() {
     f.settle();
     let requests: Vec<String> = f.sim.requests().into_iter().map(|r| r.url).collect();
     assert_eq!(
-        f.view.status.get_untracked(),
+        f.view.common.status.get_untracked(),
         MapStatus::Ready,
         "{requests:#?}"
     );
@@ -165,8 +164,8 @@ fn the_recorded_liberty_style_draws_london_offline() {
         "real London is full of names: {frame:?}"
     );
     assert_eq!(
-        f.view.attribution.get_untracked(),
-        "OpenFreeMap © OpenMapTiles Data from OpenStreetMap"
+        f.view.common.attribution.get_untracked(),
+        "© OpenStreetMap contributors · OpenFreeMap · © OpenMapTiles"
     );
     drop(f);
     day_core::uninstall_tree();

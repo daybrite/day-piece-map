@@ -6,6 +6,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
     <application>
+        <!-- Development sample key from Skip Showcase; configure your own key for your app. -->
+        <meta-data android:name="com.google.android.geo.API_KEY" android:value="AIzaSyBdt_bhz4zi6WAUelkVkEnxMs9pkbEKXKM" />
         <!-- For example, an SDK's metadata:
         <meta-data android:name="com.example.sdk.OPTION" android:value="true" />
         -->

@@ -587,7 +587,7 @@ fn simplify(pts: &[Point], tolerance: f64) -> Vec<Point> {
         .collect()
 }
 
-/// A feature under a tap ([`crate::MapView::tap`]): the style layer that drew it and what the
+/// A feature under a tap ([`crate::CanvasMapView::feature_hits`]): the style layer that drew it and what the
 /// tile says about it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FeatureHit {

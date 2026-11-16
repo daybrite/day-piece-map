@@ -40,3 +40,85 @@ status_ready = Ready
 status_failed = Failed: { $reason }
 position = { $lat }, { $lng } at zoom { $zoom }
 frame = { $tiles } tiles drawn, { $labels } labels, { $pending } loading
+
+# Map provider selection and setup.
+map_provider_osm = OpenStreetMap
+map_provider_apple = Apple Maps
+map_provider_google = Google Maps
+map_missing_api_key = Configure a Google Maps API key for this Android app.
+map_play_services_unavailable = Google Maps requires Google Play services.
+map_load_failed = The map could not load. Check the connection and provider configuration.
+
+language_name =
+    { $code ->
+        [am] Amharic
+        [ar] Arabic
+        [az] Azerbaijani
+        [be] Belarusian
+        [bg] Bulgarian
+        [br] Breton
+        [bs] Bosnian
+        [ca] Catalan
+        [co] Corsican
+        [cs] Czech
+        [cy] Welsh
+        [da] Danish
+        [de] German
+        [el] Greek
+        [en] English
+        [eo] Esperanto
+        [es] Spanish
+        [et] Estonian
+        [eu] Basque
+        [fi] Finnish
+        [fr] French
+        [fy] Western Frisian
+        [ga] Irish
+        [gd] Scottish Gaelic
+        [he] Hebrew
+        [hi] Hindi
+        [hr] Croatian
+        [hu] Hungarian
+        [hy] Armenian
+        [id] Indonesian
+        [is] Icelandic
+        [it] Italian
+        [ja] Japanese
+        [ka] Georgian
+        [kk] Kazakh
+        [kn] Kannada
+        [ko] Korean
+        [ku] Kurdish
+        [la] Latin
+        [lb] Luxembourgish
+        [lt] Lithuanian
+        [lv] Latvian
+        [mk] Macedonian
+        [ml] Malayalam
+        [mt] Maltese
+        [nl] Dutch
+        [no] Norwegian
+        [oc] Occitan
+        [pl] Polish
+        [pt] Portuguese
+        [rm] Romansh
+        [ro] Romanian
+        [ru] Russian
+        [sk] Slovak
+        [sl] Slovenian
+        [sq] Albanian
+        [sr] Serbian
+        [sv] Swedish
+        [ta] Tamil
+        [te] Telugu
+        [th] Thai
+        [tr] Turkish
+        [uk] Ukrainian
+        [vi] Vietnamese
+        [zh] Chinese
+       *[other] { $code }
+    }
+sight_island_center = Island center
+sight_east_coast = East coast
+sight_trafalgar_square = Trafalgar Square
+sight_elizabeth_tower = Elizabeth Tower
