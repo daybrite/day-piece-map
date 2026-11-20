@@ -1,6 +1,6 @@
 [package]
 name = "day-piece-map-canvas"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.100"
 description = "Day's canvas renderer, supporting MapLibre styles and vector tiles"
