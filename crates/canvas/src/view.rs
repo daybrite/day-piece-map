@@ -196,6 +196,11 @@ struct State {
     animation: Option<day_core::frame::FrameHandle>,
     /// The last single tap, waiting to learn whether a second one makes it a double.
     last_tap: Option<Point>,
+    /// When that tap landed (`frame::now_secs`), for the drag that may follow it.
+    last_tap_at: f64,
+    /// A one-finger zoom in progress (a tap, then a drag from the same spot): the zoom it
+    /// started from and the point it zooms about.
+    tap_zoom: Option<(f64, Point)>,
     /// The frames counting down to reporting that tap as a single one.
     tap_timer: Option<day_core::frame::FrameHandle>,
     /// The data tiles the last frame drew from, for the tap's feature query.
@@ -314,6 +319,8 @@ pub fn map_with_client<M>(
             rotating: false,
             animation: None,
             last_tap: None,
+            last_tap_at: 0.0,
+            tap_zoom: None,
             tap_timer: None,
             frame_tiles: Vec::new(),
             request_serial: view.common.request.get_untracked().map_or(0, |r| r.serial),
@@ -381,6 +388,9 @@ pub fn map_with_client<M>(
     let on_drag = {
         let shared = shared.clone();
         move |drag: Drag| {
+            if tap_zoom_by(&shared, drag) {
+                return;
+            }
             if !shared.view.common.interaction.get_untracked().pan {
                 return;
             }
@@ -532,15 +542,17 @@ fn rotate_by(shared: &Rc<Shared>, phase: DragPhase, rotation: f64, location: Poi
                         st.animation = None;
                     }
                     // The dead zone is taken out, so the map starts turning from where it is.
-                    base + degrees - ROTATE_DEAD_ZONE.copysign(degrees)
+                    // The content follows the fingers, and content turned clockwise is a heading
+                    // turned counter-clockwise, hence the subtraction.
+                    base - (degrees - ROTATE_DEAD_ZONE.copysign(degrees))
                 }
                 // A lone trackpad tick: the angle is this event's own.
-                None => current + degrees,
+                None => current - degrees,
             },
             DragPhase::Ended => {
                 let b = match st.rotate_base {
                     Some(base) if st.rotating => {
-                        base + degrees - ROTATE_DEAD_ZONE.copysign(degrees)
+                        base - (degrees - ROTATE_DEAD_ZONE.copysign(degrees))
                     }
                     _ => current,
                 };
@@ -641,6 +653,7 @@ fn tap_at(shared: &Rc<Shared>, point: Point) {
             });
         st.tap_timer = None;
         st.last_tap = if double { None } else { Some(point) };
+        st.last_tap_at = day_core::frame::now_secs();
         double
     };
     if double && shared.view.common.interaction.get_untracked().zoom {
@@ -666,6 +679,71 @@ fn tap_at(shared: &Rc<Shared>, point: Point) {
 /// Two taps this close in time and space are a double tap.
 const DOUBLE_TAP_SECS: f64 = 0.3;
 const DOUBLE_TAP_SLOP: f64 = 30.0;
+
+/// The one-finger zoom of the native maps: tap, touch again at the same spot and drag up or
+/// down without lifting. Returns whether `drag` belongs to such a gesture, in which case it
+/// zooms and must not pan.
+///
+/// A drag starts the gesture when it begins within [`TAP_ZOOM_SECS_AFTER_TAP`] of a tap and
+/// [`DOUBLE_TAP_SLOP`] points of it. The map zooms about the tapped spot, one level for every
+/// [`TAP_ZOOM_POINTS_PER_LEVEL`] points of vertical travel, in the direction the platform's own
+/// map uses.
+fn tap_zoom_by(shared: &Rc<Shared>, drag: Drag) -> bool {
+    let zoom = {
+        let mut st = shared.state.borrow_mut();
+        if drag.phase == DragPhase::Began {
+            // Where the finger came down, not where the recognizer noticed it had moved.
+            let start = Point::new(
+                drag.location.x - drag.translation.x,
+                drag.location.y - drag.translation.y,
+            );
+            let follows_a_tap = st.last_tap.is_some_and(|tap| {
+                day_core::frame::now_secs() - st.last_tap_at <= TAP_ZOOM_SECS_AFTER_TAP
+                    && ((tap.x - start.x).powi(2) + (tap.y - start.y).powi(2)).sqrt()
+                        <= DOUBLE_TAP_SLOP
+            });
+            st.tap_zoom = None;
+            if !follows_a_tap || !shared.view.common.interaction.get_untracked().zoom {
+                return false;
+            }
+            // The first tap is part of this gesture, not a tap on the map.
+            let anchor = st.last_tap.take().unwrap_or(start);
+            st.tap_timer = None;
+            stop_motion(&mut st);
+            drop(st);
+            let base = camera_now(shared).zoom;
+            shared.state.borrow_mut().tap_zoom = Some((base, anchor));
+            return true;
+        }
+        let Some((base, anchor)) = st.tap_zoom else {
+            return false;
+        };
+        if drag.phase == DragPhase::Ended {
+            st.tap_zoom = None;
+        }
+        (
+            base + TAP_ZOOM_DIRECTION * drag.translation.y / TAP_ZOOM_POINTS_PER_LEVEL,
+            anchor,
+        )
+    };
+    let camera = camera_now(shared);
+    move_to(shared, camera.zoomed_about(zoom.0, zoom.1));
+    true
+}
+
+/// A drag that begins this soon after a tap, at the same spot, is a one-finger zoom. Longer than
+/// the double-tap window: the finger comes down inside that window, and the drag is recognized
+/// only once it has moved.
+const TAP_ZOOM_SECS_AFTER_TAP: f64 = 0.5;
+/// The vertical travel, in points, that changes the zoom by one level.
+const TAP_ZOOM_POINTS_PER_LEVEL: f64 = 120.0;
+/// Which way zooms in. Apple's maps zoom in as the finger moves up; Google's as it moves down.
+/// Each platform keeps the direction its users already know.
+const TAP_ZOOM_DIRECTION: f64 = if cfg!(target_os = "android") {
+    1.0
+} else {
+    -1.0
+};
 
 /// Report a single tap: the marker under it, else the features the last frame drew there.
 fn report_tap(shared: &Rc<Shared>, point: Point) {
@@ -1333,7 +1411,8 @@ fn turn_about(center: Point, radians: f64) -> Affine {
 /// drawn through this until a new placement lands.
 fn view_onto(then: &Camera, now: &Camera) -> Affine {
     let k = now.scale() / then.scale();
-    let turn = (now.bearing - then.bearing).to_radians();
+    // The content's turn on screen, which runs against the bearing (`Camera::bearing_radians`).
+    let turn = now.bearing_radians() - then.bearing_radians();
     let m = then.middle();
     let shows = now.world_to_screen(then.center.to_world());
     Affine::translate(-m.x, -m.y)

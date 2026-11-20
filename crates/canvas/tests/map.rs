@@ -465,6 +465,68 @@ fn flights_fits_and_turns_arrive_where_asked() {
     day_core::uninstall_tree();
 }
 
+/// The native maps' one-finger zoom: a tap, then a drag from the same spot, zooms about that
+/// spot instead of panning. A drag that starts somewhere else after a tap still pans.
+#[test]
+fn a_tap_then_a_drag_from_the_same_spot_zooms_about_it() {
+    let f = boot();
+    f.settle();
+    let (node, _) = f.canvas();
+    let drag = |phase, from: Point, dy: f64| {
+        f.probe.emit(
+            NodeId(node),
+            Event::Drag {
+                phase,
+                location: Point::new(from.x, from.y + dy),
+                translation: Point::new(0.0, dy),
+            },
+        );
+    };
+    let spot = Point::new(300.0, 200.0);
+    let zoom = f.view.common.zoom.get_untracked();
+    let center = f.view.common.center.get_untracked();
+
+    f.probe.emit(NodeId(node), Event::Tap(spot));
+    drag(DragPhase::Began, spot, 0.0);
+    // One level per 120 points; up zooms in on Apple's maps and down on Google's.
+    let travel = if cfg!(target_os = "android") {
+        120.0
+    } else {
+        -120.0
+    };
+    drag(DragPhase::Changed, spot, travel);
+    f.tick();
+    drag(DragPhase::Ended, spot, travel);
+    f.tick();
+    let zoomed = f.view.common.zoom.get_untracked();
+    assert!((zoomed - (zoom + 1.0)).abs() < 1e-6, "{zoom} -> {zoomed}");
+    // It zoomed about the tapped spot, which is off-center, so the center moved toward it.
+    assert_ne!(f.view.common.center.get_untracked(), center);
+
+    // Dragging back the other way zooms out again, past where it started.
+    f.probe.emit(NodeId(node), Event::Tap(spot));
+    drag(DragPhase::Began, spot, 0.0);
+    drag(DragPhase::Ended, spot, -2.0 * travel);
+    f.tick();
+    let out = f.view.common.zoom.get_untracked();
+    assert!((out - (zoomed - 2.0)).abs() < 1e-6, "{zoomed} -> {out}");
+
+    // A tap, then a drag that starts elsewhere: an ordinary pan, the zoom untouched.
+    let before = f.view.common.center.get_untracked();
+    f.probe.emit(NodeId(node), Event::Tap(spot));
+    let far = Point::new(60.0, 420.0);
+    drag(DragPhase::Began, far, 0.0);
+    drag(DragPhase::Changed, far, 80.0);
+    f.tick();
+    drag(DragPhase::Ended, far, 80.0);
+    f.tick();
+    assert_eq!(f.view.common.zoom.get_untracked(), out);
+    assert_ne!(f.view.common.center.get_untracked(), before, "it panned");
+    f.settle();
+    drop(f);
+    day_core::uninstall_tree();
+}
+
 #[test]
 fn taps_report_markers_and_features_and_a_double_tap_zooms() {
     let f = boot();
@@ -564,7 +626,9 @@ fn a_twist_turns_the_map_and_a_small_one_settles_north() {
         );
     };
     let under = f.view.common.center.get_untracked();
-    // A quarter turn clockwise: the bearing follows (less the dead zone), the center holds.
+    // The fingers make a quarter turn clockwise and the content follows them. Content turned
+    // clockwise is a heading turned the other way (west comes to the top), so the bearing goes
+    // to about -90, less the dead zone. The center holds.
     twist(DragPhase::Began, 0.0);
     twist(DragPhase::Changed, 0.4);
     f.tick();
@@ -573,7 +637,7 @@ fn a_twist_turns_the_map_and_a_small_one_settles_north() {
     twist(DragPhase::Ended, std::f64::consts::FRAC_PI_2);
     f.tick();
     let bearing = f.view.common.bearing.get_untracked();
-    assert!((85.0..=90.0).contains(&bearing), "{bearing}");
+    assert!((-90.0..=-85.0).contains(&bearing), "{bearing}");
     let center = f.view.common.center.get_untracked();
     assert!((center.lng - under.lng).abs() < 1e-6 && (center.lat - under.lat).abs() < 1e-6);
     // The frame draws the tiles through a turn and the labels upright: a Concat op appears.
@@ -603,7 +667,7 @@ fn a_twist_turns_the_map_and_a_small_one_settles_north() {
     f.tick();
     twist(DragPhase::Ended, 0.12);
     f.tick();
-    assert!(f.view.common.bearing.get_untracked() > 0.0);
+    assert!(f.view.common.bearing.get_untracked() < 0.0);
     run_frames(&f, 2.0, 0.8);
     assert_eq!(
         f.view.common.bearing.get_untracked(),

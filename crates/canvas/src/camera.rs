@@ -26,7 +26,9 @@ pub use day_piece_map::{LngLat, MAX_LATITUDE, MAX_ZOOM, wrap_bearing};
 pub struct Camera {
     pub center: LngLat,
     pub zoom: f64,
-    /// Degrees the map is turned clockwise on screen: `0.0` puts north up, `90.0` east up.
+    /// The compass heading at the top of the screen, in degrees clockwise from north: `0.0` puts
+    /// north up, `90.0` east up. The same sense as a native map's camera heading, so the content
+    /// turns counter-clockwise on screen as the bearing grows.
     pub bearing: f64,
     pub size: Size,
 }
@@ -53,9 +55,12 @@ impl Camera {
         }
     }
 
-    /// The bearing in radians, the sense `Affine::rotate` and `sin_cos` use on a y-down screen.
+    /// How far the north-up content is turned on screen, in radians, in the sense
+    /// `Affine::rotate` and `sin_cos` use on a y-down screen (positive is clockwise). It is the
+    /// bearing negated: facing east (`90.0`) turns the content a quarter turn counter-clockwise,
+    /// which is what brings east to the top.
     pub fn bearing_radians(&self) -> f64 {
-        self.bearing.to_radians()
+        -self.bearing.to_radians()
     }
 
     /// The viewport's middle.
@@ -275,6 +280,28 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bearing is a compass heading, as on Apple's and Google's maps: at 90 the camera faces
+    /// east, so a place east of the center shows above it and one to the north shows to the left.
+    #[test]
+    fn a_bearing_of_ninety_puts_east_at_the_top() {
+        let size = Size::new(800.0, 600.0);
+        let center = LngLat::new(-0.1276, 51.5072);
+        let east = LngLat::new(center.lng + 0.01, center.lat);
+        let north = LngLat::new(center.lng, center.lat + 0.01);
+        let up = Camera::new(center, 14.0, size);
+        assert!(up.project(east).x > 400.0 && up.project(north).y < 300.0);
+        let facing_east = Camera::with_bearing(center, 14.0, 90.0, size);
+        let (e, n) = (facing_east.project(east), facing_east.project(north));
+        assert!(
+            e.y < 300.0 && (e.x - 400.0).abs() < 1e-6,
+            "east is straight up: {e:?}"
+        );
+        assert!(
+            n.x < 400.0 && (n.y - 300.0).abs() < 1e-6,
+            "north is to the left: {n:?}"
+        );
+    }
 
     #[test]
     fn a_turned_camera_keeps_its_center_and_round_trips() {

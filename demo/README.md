@@ -21,8 +21,9 @@ the last frame drew, what the last tap found, the attribution) is what the walkt
 and asserts on; the map itself is a canvas, so the screenshots are what show it.
 
 Pan with a drag, a two-finger scroll or a wheel; zoom with a pinch, a trackpad magnify, or
-Control and the wheel; turn with a two-finger twist; double-tap to zoom in on a spot; tap a
-marker or the map to see what is there. Swipes and pinches glide on after the fingers lift.
+Control and the wheel; turn with a two-finger twist; double-tap to zoom in on a spot, or tap
+and then drag up or down from the same spot to zoom with one finger; tap a marker or the map to
+see what is there. Swipes and pinches glide on after the fingers lift.
 
 ## Run it
 
