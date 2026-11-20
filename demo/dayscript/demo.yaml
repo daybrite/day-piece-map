@@ -41,10 +41,11 @@ flow:
   - pause: { secs: 1.0 }
   - assert_text: { id: map_bearing, text: "North up" }
 
-  # A two-finger twist turns the map too: a third of a turn clockwise.
+  # A two-finger twist turns the map too: a third of a turn clockwise. The content follows the
+  # fingers, so the heading at the top of the screen swings the other way, to 360 - 116.
   - rotate: { id: map_canvas, rotation: 2.1, steps: 8 }
   - pause: { secs: 1.0 }
-  - assert_text: { id: map_bearing, text: "Bearing 116°" }
+  - assert_text: { id: map_bearing, text: "Bearing 244°" }
   - screenshot: map-twisted
   - tap: { id: map_north }
   - pause: { secs: 1.0 }
