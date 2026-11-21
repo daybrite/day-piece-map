@@ -20,7 +20,7 @@ use crate::source::TileId;
 use crate::style::{Layer, LayerKind, Style, SymbolProps};
 use crate::symbol::{self, Anchor, CollisionIndex};
 use crate::{Feature, GeometryType, Value};
-use day_geometry::{Affine, Color, Point, Rect, Size};
+use day_geometry::{Affine, Angle, Color, Point, Rect, Size};
 use day_pieces::{Draw, PathBuilder, TextStyle};
 use day_spec::{
     CanvasFont, FillRule, FontWeight, LineCap, LineJoin, Shape, StrokeStyle, TextAnchor,
@@ -1481,11 +1481,13 @@ fn rotate_offset(anchor: Point, offset: Point, angle: f64) -> Point {
 fn draw_text(d: &mut Draw, anchor: &Anchor, t: &TextBlock) {
     let angle = if t.rotates { anchor.angle } else { 0.0 };
     d.save();
-    d.concat(Affine::rotate(angle).then(Affine::translate(anchor.point.x, anchor.point.y)));
+    d.concat(
+        Affine::rotate(Angle::rad(angle)).then(Affine::translate(anchor.point.x, anchor.point.y)),
+    );
     let top = t.offset.y - t.height / 2.0;
     let style = TextStyle {
         size: t.size,
-        color: t.color,
+        color: t.color.into(),
         anchor: TextAnchor::CENTERED,
         font: t.font.clone(),
     };
@@ -1493,7 +1495,7 @@ fn draw_text(d: &mut Draw, anchor: &Anchor, t: &TextBlock) {
         let at = Point::new(t.offset.x, top + (i as f64 + 0.5) * t.line_height);
         if t.halo_width > 0.0 && t.halo_color.a > 0.0 {
             let halo = TextStyle {
-                color: t.halo_color,
+                color: t.halo_color.into(),
                 font: t.font.clone(),
                 ..style
             };
@@ -1528,7 +1530,9 @@ fn draw_icon(d: &mut Draw, sprite: &Sprite, anchor: &Anchor, i: &IconBlock) {
     let Some(sheet) = &sprite.sheet else { return };
     let angle = if i.rotates { anchor.angle } else { 0.0 } + i.rotate;
     d.save();
-    d.concat(Affine::rotate(angle).then(Affine::translate(anchor.point.x, anchor.point.y)));
+    d.concat(
+        Affine::rotate(Angle::rad(angle)).then(Affine::translate(anchor.point.x, anchor.point.y)),
+    );
     let dest = Rect::new(
         i.offset.x - i.width / 2.0,
         i.offset.y - i.height / 2.0,

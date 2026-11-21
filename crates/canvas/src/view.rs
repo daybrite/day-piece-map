@@ -16,7 +16,7 @@ use crate::render::{self, FeatureHit, Pass, RenderTile, Scene, Sprite, Stats, Ti
 use crate::source::{SourceSpec, TileId, TileSource};
 use crate::style::Style;
 use crate::{Error, mvt, source};
-use day_geometry::{Affine, Color, Point, Rect, Size};
+use day_geometry::{Affine, Angle, Color, Point, Rect, Size};
 use day_pieces::prelude::*;
 use day_pieces::{Draw, IntoReactive, TextStyle};
 use day_reactive::{Signal, Trigger};
@@ -106,10 +106,8 @@ const FLING_MIN_SPEED: f64 = 60.0;
 const FLING_STOP_SPEED: f64 = 2.0;
 /// The fastest glide, in points per second; a flick past this is clamped.
 const FLING_MAX_SPEED: f64 = 5000.0;
-/// How far back the release velocity is read from, in seconds.
-const FLING_WINDOW: f64 = 0.1;
-/// A finger that rested this long before lifting was a drag that stopped, not a swipe.
-const FLING_REST: f64 = 0.15;
+/// The time step, in seconds, over which a release velocity is turned into world units.
+const FLING_STEP: f64 = 1e-3;
 /// How far the view may move, as a fraction of its shorter side, before labels are placed
 /// again.
 const LABEL_SHIFT: f64 = 0.25;
@@ -171,18 +169,15 @@ struct State {
     retry: Option<day_core::frame::FrameHandle>,
     /// How many tiles the last placement drew from: more tiles now means place again at once.
     labels_tiles: usize,
-    /// A touch is down: its camera positions are sampled for the fling at release.
-    tracking: bool,
-    /// The last few camera positions (zoom-0 world units) with their frame times, seconds.
-    samples: std::collections::VecDeque<(Point, f64)>,
     /// The fling in progress; dropping it stops the glide.
     fling: Option<day_core::frame::FrameHandle>,
     /// Pixels per point of the rasters: `RASTER_SCALE` until this device proves too slow for it.
     raster_scale: f64,
     /// The last few raster paint times, for that decision.
     paint_samples: Vec<f64>,
-    /// The zooms a pinch passed through with their times, for its momentum at release.
-    pinch_samples: std::collections::VecDeque<(f64, f64)>,
+    /// The zooms a pinch passed through (as `x`), for its momentum at release. Pinch events
+    /// carry no velocity, so the pinch measures its own the way Day measures a drag's.
+    pinch_velocity: day_core::gesture::VelocityTracker,
     /// Where the pinch was last, the point its momentum zooms about.
     pinch_location: Point,
     /// The zoom glide after a pinch; dropping it stops it.
@@ -307,12 +302,10 @@ pub fn map_with_client<M>(
             labels_placed_at: 0,
             retry: None,
             labels_tiles: 0,
-            tracking: false,
-            samples: std::collections::VecDeque::new(),
             fling: None,
             raster_scale: RASTER_SCALE,
             paint_samples: Vec::new(),
-            pinch_samples: std::collections::VecDeque::new(),
+            pinch_velocity: day_core::gesture::VelocityTracker::default(),
             pinch_location: Point::ZERO,
             zoom_fling: None,
             rotate_base: None,
@@ -413,7 +406,7 @@ pub fn map_with_client<M>(
                 DragPhase::Changed => {}
                 DragPhase::Ended => {
                     pan_by(&shared, delta);
-                    end_touch(&shared);
+                    end_touch(&shared, drag.velocity);
                     return;
                 }
             }
@@ -433,7 +426,7 @@ pub fn map_with_client<M>(
                 DragPhase::Changed => {}
                 DragPhase::Ended => {
                     pan_by(&shared, pan.delta);
-                    end_touch(&shared);
+                    end_touch(&shared, pan.velocity);
                     return;
                 }
             }
@@ -455,22 +448,15 @@ pub fn map_with_client<M>(
                     DragPhase::Began => {
                         stop_motion(&mut st);
                         st.pinch_base = Some(current);
-                        st.pinch_samples.clear();
-                        st.pinch_samples.push_back((current, now));
+                        st.pinch_velocity.reset();
+                        st.pinch_velocity.push(now, Point::new(current, 0.0));
                         current
                     }
                     DragPhase::Changed => match st.pinch_base {
                         // Cumulative since Began.
                         Some(base) => {
                             let z = base + pinch.scale.max(1e-6).log2();
-                            st.pinch_samples.push_back((z, now));
-                            while st
-                                .pinch_samples
-                                .front()
-                                .is_some_and(|(_, t)| now - t > FLING_WINDOW)
-                            {
-                                st.pinch_samples.pop_front();
-                            }
+                            st.pinch_velocity.push(now, Point::new(z, 0.0));
                             z
                         }
                         // A lone wheel event: the scale is this event's own factor.
@@ -501,7 +487,7 @@ pub fn map_with_client<M>(
         let shared = shared.clone();
         move |r: Rotate| {
             if shared.view.common.interaction.get_untracked().rotate {
-                rotate_by(&shared, r.phase, r.rotation, r.location);
+                rotate_by(&shared, r.phase, r.rotation.radians(), r.location);
             }
         }
     };
@@ -582,7 +568,6 @@ fn stop_motion(st: &mut State) {
     st.fling = None;
     st.zoom_fling = None;
     st.animation = None;
-    st.samples.clear();
 }
 
 /// The pinch lifted at `zoom`: keep zooming with the speed of its last tenth of a second,
@@ -594,16 +579,10 @@ fn stop_motion(st: &mut State) {
 fn end_pinch(shared: &Rc<Shared>, zoom: f64, now: f64) {
     let (velocity, anchor) = {
         let mut st = shared.state.borrow_mut();
-        let first = st.pinch_samples.front().copied();
-        st.pinch_samples.clear();
-        let Some((z0, t0)) = first else {
-            return;
-        };
-        let dt = now - t0;
-        if dt < 1e-3 {
-            return;
-        }
-        ((zoom - z0) / dt, st.pinch_location)
+        st.pinch_velocity.push(now, Point::new(zoom, 0.0));
+        let velocity = st.pinch_velocity.velocity(now).x;
+        st.pinch_velocity.reset();
+        (velocity, st.pinch_location)
     };
     if velocity.abs() < ZOOM_FLING_MIN {
         return;
@@ -973,7 +952,7 @@ fn draw_markers(d: &mut Draw, camera: &Camera, markers: &[(MarkerId, Marker)]) {
             let font = render::font_for(&["Noto Sans Bold".to_string()]);
             let halo = TextStyle {
                 size: 13.0,
-                color: Color::WHITE,
+                color: Color::WHITE.into(),
                 anchor: TextAnchor {
                     h: day_spec::props::TextAlign::Leading,
                     v: day_spec::TextVAlign::Middle,
@@ -991,7 +970,7 @@ fn draw_markers(d: &mut Draw, camera: &Camera, markers: &[(MarkerId, Marker)]) {
                 &annotation_text,
                 at,
                 TextStyle {
-                    color: Color::rgb(0.1, 0.1, 0.1),
+                    color: Color::rgb(0.1, 0.1, 0.1).into(),
                     ..halo
                 },
             );
@@ -1024,7 +1003,7 @@ fn move_to(shared: &Rc<Shared>, camera: Camera) {
     st.pending = Some(camera);
     if st.frame.is_none() {
         let shared = shared.clone();
-        st.frame = Some(shared.clone().clock.request(move |frame| {
+        st.frame = Some(shared.clone().clock.request(move |_| {
             let camera = {
                 let mut st = shared.state.borrow_mut();
                 st.frame = None;
@@ -1036,73 +1015,45 @@ fn move_to(shared: &Rc<Shared>, camera: Camera) {
                 if shared.view.common.bearing.get_untracked() != camera.bearing {
                     shared.view.common.bearing.set(camera.bearing);
                 }
-                let mut st = shared.state.borrow_mut();
-                if st.tracking {
-                    let t = frame.timestamp.as_secs_f64();
-                    st.samples.push_back((camera.center.to_world(), t));
-                    while st
-                        .samples
-                        .front()
-                        .is_some_and(|(_, t0)| t - t0 > FLING_WINDOW)
-                    {
-                        st.samples.pop_front();
-                    }
-                }
             }
         }));
     }
 }
 
-/// A finger came down: whatever was gliding stops, and its positions are sampled from here.
+/// A finger came down: whatever was gliding stops.
 fn begin_touch(shared: &Rc<Shared>) {
-    let mut st = shared.state.borrow_mut();
-    stop_motion(&mut st);
-    st.tracking = true;
+    stop_motion(&mut shared.state.borrow_mut());
 }
 
-/// The finger lifted: read the velocity of its last tenth of a second and, if it was a swipe,
-/// glide on with it, decaying as `UIScrollView` does. Tiles and labels follow the camera as
-/// they do under a finger.
-fn end_touch(shared: &Rc<Shared>) {
-    let (velocity, last_t, zoom, size) = {
-        let mut st = shared.state.borrow_mut();
-        st.tracking = false;
-        let (Some((p0, t0)), Some((p1, t1))) =
-            (st.samples.front().copied(), st.samples.back().copied())
-        else {
-            return;
-        };
-        st.samples.clear();
-        let dt = t1 - t0;
-        if dt < 1e-3 {
-            return;
-        }
-        (
-            Point::new((p1.x - p0.x) / dt, (p1.y - p0.y) / dt),
-            t1,
-            shared.view.common.zoom.get_untracked(),
-            st.size,
-        )
-    };
-    let scale = 2f64.powf(zoom);
-    let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt() * scale;
-    if speed < FLING_MIN_SPEED {
+/// The finger lifted with `release` velocity (points per second on screen, `Drag::velocity`,
+/// which is zero after a rest) and, if it was a swipe, glide on with it, decaying as
+/// `UIScrollView` does. Tiles and labels follow the camera as they do under a finger.
+fn end_touch(shared: &Rc<Shared>, release: Point) {
+    let screen_speed = (release.x * release.x + release.y * release.y).sqrt();
+    if screen_speed < FLING_MIN_SPEED {
         return;
     }
-    let clamp = (FLING_MAX_SPEED / speed).min(1.0);
+    let camera = camera_now(shared);
+    let (zoom, size) = (camera.zoom, camera.size);
+    let scale = 2f64.powf(zoom);
+    // The camera's own pan turns the screen velocity into a world one, bearing and all: the
+    // content follows the finger, so the center moves the other way. Measured over a short
+    // step, taking the short way across the antimeridian.
+    let from = camera.center.to_world();
+    let to = camera
+        .panned(Point::new(release.x * FLING_STEP, release.y * FLING_STEP))
+        .center
+        .to_world();
+    let mut dx = to.x - from.x;
+    if dx.abs() > crate::camera::WORLD / 2.0 {
+        dx -= crate::camera::WORLD.copysign(dx);
+    }
+    let velocity = Point::new(dx / FLING_STEP, (to.y - from.y) / FLING_STEP);
+    let clamp = (FLING_MAX_SPEED / screen_speed).min(1.0);
     let mut v = Point::new(velocity.x * clamp, velocity.y * clamp);
-    let mut started: Option<f64> = None;
     let shared2 = shared.clone();
     let handle = shared.clock.subscribe(move |frame| {
-        let now = frame.timestamp.as_secs_f64();
         let dt = frame.delta.as_secs_f64();
-        if started.is_none() {
-            // A finger that rested before lifting was not swiping.
-            if now - last_t > FLING_REST {
-                return std::ops::ControlFlow::Break(());
-            }
-            started = Some(now);
-        }
         if dt <= 0.0 {
             return std::ops::ControlFlow::Continue(());
         }
@@ -1390,7 +1341,7 @@ fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
             Point::new(size.width / 2.0, size.height / 2.0),
             TextStyle {
                 size: 13.0,
-                color: Color::rgb(0.4, 0.4, 0.4),
+                color: Color::rgb(0.4, 0.4, 0.4).into(),
                 anchor: TextAnchor::CENTERED,
                 font: CanvasFont::default(),
             },
@@ -1402,7 +1353,7 @@ fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
 /// The transform that turns the screen by `radians` about `center`.
 fn turn_about(center: Point, radians: f64) -> Affine {
     Affine::translate(-center.x, -center.y)
-        .then(Affine::rotate(radians))
+        .then(Affine::rotate(Angle::rad(radians)))
         .then(Affine::translate(center.x, center.y))
 }
 
@@ -1417,7 +1368,7 @@ fn view_onto(then: &Camera, now: &Camera) -> Affine {
     let shows = now.world_to_screen(then.center.to_world());
     Affine::translate(-m.x, -m.y)
         .then(Affine::scale(k, k))
-        .then(Affine::rotate(turn))
+        .then(Affine::rotate(Angle::rad(turn)))
         .then(Affine::translate(shows.x, shows.y))
 }
 

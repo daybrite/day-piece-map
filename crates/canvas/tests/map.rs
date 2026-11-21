@@ -14,7 +14,7 @@ use day_piece_map_canvas::{
     CanvasMapView, Feature, GeometryType, LngLat, MapStatus, Marker, Value, map_with_client,
 };
 use day_reactive::flush_sync;
-use day_spec::{DragPhase, DrawOp, Event, NodeId, WindowOptions};
+use day_spec::{DragPhase, DrawOp, Event, GestureKind, NodeId, WindowOptions};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -309,6 +309,17 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
             },
         );
     };
+    // The release velocity the platform's recognizer reports, in points per second: the events
+    // here arrive within the same instant, so Day's own estimate from them is zero.
+    let release = |vx: f64| {
+        f.probe.emit(
+            NodeId(node),
+            Event::GestureVelocity {
+                kind: GestureKind::Drag,
+                velocity: Point::new(vx, 0.0),
+            },
+        );
+    };
     // A quick swipe to the right over three frames: the content follows, so the center moves
     // west.
     let mut t = 1.0;
@@ -318,6 +329,7 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
         t += 0.016;
         f.tick_at(t);
     }
+    release(2500.0);
     drag(DragPhase::Ended, 120.0);
     t += 0.016;
     f.tick_at(t);
@@ -354,6 +366,7 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
         t += 0.016;
         f.tick_at(t);
     }
+    release(2500.0);
     drag(DragPhase::Ended, 80.0);
     t += 0.016;
     f.tick_at(t);
@@ -375,7 +388,7 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
         held,
         "a finger down holds the map still"
     );
-    // A drag that rests before lifting does not glide.
+    // A drag that rests before lifting has no release velocity, and does not glide.
     drag(DragPhase::Changed, 40.0);
     t += 0.016;
     f.tick_at(t);
@@ -762,22 +775,21 @@ fn shared_geometry_is_reactive_and_draws_in_list_order() {
     let stroke = ops
         .iter()
         .position(
-            |op| matches!(op, DrawOp::Stroke(Shape::Path(..), c, _) if *c == Paint::Solid(line)),
+            |op| matches!(op, DrawOp::Stroke(Shape::Path(..), c, _) if *c == Paint::Solid(line.into())),
         )
         .expect("shared line");
     let polygon = ops
         .iter()
-        .position(|op| matches!(op, DrawOp::Fill(Shape::Polygon(_), c) if *c == Paint::Solid(fill)))
+        .position(|op| matches!(op, DrawOp::Fill(Shape::Polygon(_), c) if *c == Paint::Solid(fill.into())))
         .expect("shared polygon");
     assert!(stroke < polygon, "list order is paint order");
     f.view.common.overlays.set(Vec::new());
     flush_sync();
     f.tick();
     let (_, ops) = f.canvas();
-    assert!(
-        !ops.iter()
-            .any(|op| matches!(op, DrawOp::Fill(Shape::Polygon(_), c) if *c == Paint::Solid(fill)))
-    );
+    assert!(!ops.iter().any(
+        |op| matches!(op, DrawOp::Fill(Shape::Polygon(_), c) if *c == Paint::Solid(fill.into()))
+    ));
     drop(f);
     day_core::uninstall_tree();
 }
