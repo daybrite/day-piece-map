@@ -5,7 +5,7 @@
 //! served by `day-part-http`'s `Simulation` on a manual clock, so the whole path from the style
 //! URL to the display list runs synchronously in a unit test, and the gestures move the view.
 
-use day_geometry::Point;
+use day_geometry::{Point, Size};
 use day_mock::{MockProbe, MockToolkit};
 use day_part_http::Client;
 use day_part_http::simulation::{ManualClock, Reply, Simulation};
@@ -107,6 +107,10 @@ fn boot() -> Fixture {
 }
 
 fn boot_style(style: &str, width: f64) -> Fixture {
+    boot_sized(style, Size::new(width, 512.0))
+}
+
+fn boot_sized(style: &str, size: Size) -> Fixture {
     day_core::uninstall_tree();
     let clock = ManualClock::default();
     let sim = Simulation::with_clock(Arc::new(clock.clone()));
@@ -126,7 +130,7 @@ fn boot_style(style: &str, width: f64) -> Fixture {
         mock,
         WindowOptions::default()
             .title("Map fixture")
-            .size(width, 512.0),
+            .size(size.width, size.height),
         move || map_with_client("http://style.test/style.json", view, client).any(),
     );
     // After launch, which installs the toolkit's own requester: the mock delivers no frames,
@@ -174,6 +178,38 @@ impl Fixture {
     fn canvas(&self) -> (u64, Vec<DrawOp>) {
         let (_, widget) = self.probe.find_by_kind("day.canvas").remove(0);
         (widget.node, widget.ops)
+    }
+}
+
+#[test]
+fn an_empty_viewport_does_not_render_and_recovers_when_resized() {
+    for size in [Size::new(512.0, 0.0), Size::new(0.0, 512.0)] {
+        let f = boot_sized(STYLE, size);
+        f.settle();
+        assert_eq!(f.view.common.status.get_untracked(), MapStatus::Ready);
+        assert!(f.canvas().1.is_empty(), "an empty viewport must not draw");
+        assert_eq!(f.view.frame.get_untracked().bitmaps, 0);
+        assert!(
+            f.sim
+                .requests()
+                .iter()
+                .all(|r| !r.url.starts_with("http://tiles.test/")),
+            "an empty viewport must not fetch tiles"
+        );
+
+        f.probe.emit(
+            day_spec::WINDOW_NODE,
+            Event::WindowResized(Size::new(512.0, 512.0)),
+        );
+        f.settle();
+        assert!(f.view.frame.get_untracked().bitmaps > 0);
+
+        f.probe
+            .emit(day_spec::WINDOW_NODE, Event::WindowResized(size));
+        f.settle();
+        assert_eq!(f.canvas().1, [] as [DrawOp; 0]);
+        assert_eq!(f.view.frame.get_untracked().bitmaps, 0);
+        day_core::uninstall_tree();
     }
 }
 

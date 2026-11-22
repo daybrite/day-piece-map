@@ -1083,6 +1083,17 @@ fn pan_by(shared: &Rc<Shared>, delta: Point) {
 /// The frame: what the camera needs, fetched if missing, drawn from what has arrived.
 fn draw_frame(shared: &Rc<Shared>, d: &mut Draw, size: Size) {
     shared.repaint.track();
+    // A collapsed layout has no viewport to rasterize. In particular, retrying a
+    // zero-size label bitmap immediately can keep the canvas effect re-running.
+    if size.width <= 0.0 || size.height <= 0.0 {
+        shared.state.borrow_mut().size = size;
+        let mut stats = shared.view.frame.get_untracked();
+        if stats.bitmaps != 0 {
+            stats.bitmaps = 0;
+            shared.view.frame.set(stats);
+        }
+        return;
+    }
     let center = shared.view.common.center.get();
     let zoom = shared.view.common.zoom.get();
     let bearing = shared.view.common.bearing.get();
