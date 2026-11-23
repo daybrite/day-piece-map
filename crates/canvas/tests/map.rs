@@ -102,6 +102,10 @@ struct Fixture {
     frames: Rc<RefCell<Vec<day_spec::FrameCallback>>>,
 }
 
+/// A pause longer than the window Day measures a release velocity over (a tenth of a second):
+/// after it, a pointer that has not moved is at rest, however the runner scheduled the events.
+const REST: Duration = Duration::from_millis(150);
+
 fn boot() -> Fixture {
     boot_style(STYLE, 512.0)
 }
@@ -284,7 +288,9 @@ fn gestures_move_the_view() {
     assert!(after_drag.lng < start.lng, "{start:?} -> {after_drag:?}");
     assert!((after_drag.lat - start.lat).abs() < 1e-9);
     // A pinch to twice the scale is one zoom level, about its location: the point under the
-    // fingers stays put.
+    // fingers stays put. The fingers rest before lifting, so no zoom glide follows: the canvas
+    // measures a pinch's speed on the wall clock, and events a runner delivers a few
+    // milliseconds apart would otherwise read as a fast pinch.
     let anchor = Point::new(128.0, 128.0);
     let before = f.view.common.zoom.get_untracked();
     for (phase, scale) in [
@@ -293,6 +299,9 @@ fn gestures_move_the_view() {
         (DragPhase::Changed, 2.0),
         (DragPhase::Ended, 2.0),
     ] {
+        if phase == DragPhase::Ended {
+            std::thread::sleep(REST);
+        }
         f.probe.emit(
             NodeId(node),
             Event::Pinch {
@@ -424,12 +433,16 @@ fn a_swipe_glides_on_and_a_touch_stops_it() {
         held,
         "a finger down holds the map still"
     );
-    // A drag that rests before lifting has no release velocity, and does not glide.
+    // A drag that rests before lifting has no release velocity, and does not glide. Day measures
+    // that velocity on the wall clock, not the frame clock this test drives, so the rest is a
+    // real one: longer than the tracker's window. Without it, two events a runner happened to
+    // deliver a few milliseconds apart measured as a fast swipe and the map glided.
     drag(DragPhase::Changed, 40.0);
     t += 0.016;
     f.tick_at(t);
     t += 0.4;
     f.tick_at(t);
+    std::thread::sleep(REST);
     drag(DragPhase::Ended, 40.0);
     t += 0.016;
     f.tick_at(t);
